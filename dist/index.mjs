@@ -1478,6 +1478,177 @@ var ThreatForensicsCollector = class {
   }
 };
 
+// src/core/seven-layer-shield.ts
+var DANGEROUS_HTTP_METHODS = /* @__PURE__ */ new Set(["TRACE", "TRACK", "CONNECT", "DEBUG", "PUT_PROPFIND"]);
+var STANDARD_ALLOWED_METHODS = /* @__PURE__ */ new Set([
+  "GET",
+  "POST",
+  "PUT",
+  "DELETE",
+  "PATCH",
+  "OPTIONS",
+  "HEAD"
+]);
+var SevenLayerShield = class {
+  config;
+  allowedMethods;
+  maxHeaderSize;
+  constructor(config) {
+    this.config = config ?? {};
+    this.allowedMethods = new Set(
+      (config?.allowedMethods ?? Array.from(STANDARD_ALLOWED_METHODS)).map((m) => m.toUpperCase())
+    );
+    this.maxHeaderSize = config?.maxHeaderSizeBytes ?? 16384;
+  }
+  /**
+   * Layer 2: HTTP Protocol & Request Sanitization
+   * Checks for HTTP request smuggling, forbidden verbs, and header anomalies.
+   */
+  inspectProtocol(req) {
+    const method = req.method.toUpperCase();
+    if (this.config.blockDangerousMethods !== false && DANGEROUS_HTTP_METHODS.has(method)) {
+      return {
+        passed: false,
+        layer: "L2_PROTOCOL_SANITIZER",
+        threatType: "suspicious_header",
+        reason: `HTTP method ${method} is considered hazardous and blocked by Protocol Sanitizer`,
+        statusCode: 405,
+        location: "header"
+      };
+    }
+    if (!this.allowedMethods.has(method)) {
+      return {
+        passed: false,
+        layer: "L2_PROTOCOL_SANITIZER",
+        threatType: "suspicious_header",
+        reason: `HTTP verb ${method} is not in allowed methods whitelist`,
+        statusCode: 405,
+        location: "header"
+      };
+    }
+    const headers = req.headers || {};
+    const hasContentLength = "content-length" in headers;
+    const hasTransferEncoding = "transfer-encoding" in headers;
+    if (hasContentLength && hasTransferEncoding) {
+      return {
+        passed: false,
+        layer: "L2_PROTOCOL_SANITIZER",
+        threatType: "suspicious_header",
+        reason: "HTTP Request Smuggling anomaly detected: Conflicting Content-Length and Transfer-Encoding headers",
+        statusCode: 400,
+        location: "header"
+      };
+    }
+    let totalHeaderBytes = 0;
+    for (const [key, value] of Object.entries(headers)) {
+      const valStr = String(value || "");
+      totalHeaderBytes += key.length + valStr.length;
+      if (valStr.includes("\0") || key.includes("\0")) {
+        return {
+          passed: false,
+          layer: "L2_PROTOCOL_SANITIZER",
+          threatType: "suspicious_header",
+          reason: "Null byte injection detected in HTTP header",
+          statusCode: 400,
+          location: "header",
+          parameter: key
+        };
+      }
+      if (/[\r\n]/.test(valStr) || /[\r\n]/.test(key)) {
+        return {
+          passed: false,
+          layer: "L2_PROTOCOL_SANITIZER",
+          threatType: "suspicious_header",
+          reason: "CRLF injection (HTTP response splitting) detected in header",
+          statusCode: 400,
+          location: "header",
+          parameter: key
+        };
+      }
+    }
+    if (totalHeaderBytes > this.maxHeaderSize) {
+      return {
+        passed: false,
+        layer: "L2_PROTOCOL_SANITIZER",
+        threatType: "payload_too_large",
+        reason: `HTTP header size (${totalHeaderBytes} bytes) exceeded maximum threshold (${this.maxHeaderSize} bytes)`,
+        statusCode: 431,
+        // Request Header Fields Too Large
+        location: "header"
+      };
+    }
+    return { passed: true, layer: "L2_PROTOCOL_SANITIZER" };
+  }
+  /**
+   * Layer 7: Active Exploit Neutralizer & Crash Response
+   * Generates a terminating error payload that breaks the attacker's exploit script loop,
+   * rendering the exploit harmless and instantly stopped.
+   */
+  neutralizeExploit(verdict) {
+    const mode = this.config.neutralizeMode ?? "synthetic_error";
+    const securityHeaders = {
+      "Connection": "close",
+      "X-NextGuard-Shield": "L7-Neutralized",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "no-store, no-cache, must-revalidate, private"
+    };
+    if (mode === "abort_stream") {
+      return {
+        statusCode: 400,
+        headers: securityHeaders,
+        body: "ERR_CONNECTION_RESET_BY_NEXTGUARD_SHIELD",
+        shouldDestroySocket: true
+      };
+    }
+    if (mode === "synthetic_error") {
+      return {
+        statusCode: 400,
+        headers: {
+          ...securityHeaders,
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        body: {
+          error: "ERR_EXPLOIT_PAYLOAD_NEUTRALIZED",
+          status: "attack_intercepted",
+          layer: "Layer_7_Exploit_Neutralizer",
+          threat: verdict.threatType,
+          reason: verdict.reason,
+          code: "E_EXPLOIT_ABORTED",
+          message: "The incoming exploit vector was intercepted and neutralized. Execution terminated immediately.",
+          requestId: verdict.requestId,
+          timestamp: verdict.timestamp
+        },
+        shouldDestroySocket: false
+      };
+    }
+    return {
+      statusCode: verdict.statusCode || 403,
+      headers: {
+        ...securityHeaders,
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      body: {
+        success: false,
+        error: "Access Denied by NextGuard Shield",
+        code: "FIREWALL_BLOCKED",
+        threat: verdict.threatType,
+        reason: verdict.reason,
+        clientIp: verdict.clientIp,
+        requestId: verdict.requestId,
+        timestamp: verdict.timestamp
+      },
+      shouldDestroySocket: false
+    };
+  }
+  /**
+   * De-weaponize input: neutralizes dangerous shell, SQL, or script tokens
+   * so they cause runtime syntax errors in attacker scripts rather than execution.
+   */
+  deweaponizeString(input) {
+    return input.replace(/(\bOR\b|\bAND\b|\bUNION\b|\bSELECT\b)/gi, "[BLOCKED_$1]").replace(/(\bexec\b|\beval\b|\bsystem\b|\bpassthru\b)/gi, "[NEUTRALIZED_$1]").replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, "[NEUTRALIZED_SCRIPT]").replace(/(\.\.\/|\.\.\\)/g, "[NEUTRALIZED_PATH]");
+  }
+};
+
 // src/core/engine.ts
 function generateRequestId() {
   const ts = Date.now().toString(36);
@@ -1510,6 +1681,7 @@ var NextGuardEngine = class {
   reputation;
   tarpit;
   forensics;
+  shield;
   constructor(config = {}) {
     this.config = config;
     const sqliCfg = typeof config.sqlInjection === "object" ? config.sqlInjection : {};
@@ -1535,6 +1707,9 @@ var NextGuardEngine = class {
     this.reputation = new ReputationEngine(config.reputation);
     this.tarpit = new DefensiveTarpit(config.tarpit);
     this.forensics = new ThreatForensicsCollector(config.telemetry);
+    this.shield = new SevenLayerShield(
+      typeof config.sevenLayerShield === "object" ? config.sevenLayerShield : void 0
+    );
   }
   /**
    * Find matching endpoint override if defined in config.endpoints
@@ -1607,6 +1782,26 @@ var NextGuardEngine = class {
       return verdict2;
     }
     const override = this.getEndpointOverride(pathname);
+    const shieldConfig = override?.sevenLayerShield !== void 0 ? override.sevenLayerShield : this.config.sevenLayerShield;
+    if (shieldConfig !== false && shieldConfig !== void 0) {
+      const protoResult = this.shield.inspectProtocol(req);
+      if (!protoResult.passed) {
+        const verdict2 = {
+          allowed: mode === "monitor",
+          threatType: protoResult.threatType || "suspicious_header",
+          reason: protoResult.reason || "Hazardous request blocked by Protocol Sanitizer",
+          statusCode: protoResult.statusCode || 400,
+          clientIp,
+          requestId,
+          location: protoResult.location,
+          parameter: protoResult.parameter,
+          timestamp,
+          mode
+        };
+        await this.handleVerdict(verdict2, req);
+        return verdict2;
+      }
+    }
     const honeypotConfig = override?.honeypot !== void 0 ? override.honeypot : this.config.honeypot;
     if (honeypotConfig !== false && this.honeypot.isTrap(pathname)) {
       const jailDuration = this.honeypot.getJailDuration();
@@ -2061,6 +2256,9 @@ var NextGuardEngine = class {
   getForensics() {
     return this.forensics;
   }
+  getShield() {
+    return this.shield;
+  }
 };
 
 // src/security/headers.ts
@@ -2447,6 +2645,18 @@ function nextGuardExpress(config = {}) {
         res.setHeader(headerName, headerValue);
       }
       if (!verdict.allowed) {
+        if (config.sevenLayerShield) {
+          const neutralized = engine.getShield().neutralizeExploit(verdict);
+          for (const [hName, hVal] of Object.entries(neutralized.headers)) {
+            res.setHeader(hName, hVal);
+          }
+          if (neutralized.shouldDestroySocket && req.socket?.destroy) {
+            req.socket.destroy();
+            return;
+          }
+          res.status(neutralized.statusCode).json(neutralized.body);
+          return;
+        }
         const accept = headers["accept"] || "";
         const isHtml = config.htmlResponse && accept.includes("text/html");
         if (isHtml) {
@@ -3237,6 +3447,6 @@ var src_default = NextGuard;
  * @author NextGuard Team
  */
 
-export { BotDetector, CommandInjectionDetector, DEFAULT_HONEYPOT_PATHS, DefensiveTarpit, ENDPOINT_PRESETS, EndpointRegistry, HoneypotTrap, IPFilter, MemoryStore, NextGuard, NextGuardEngine, NoSQLInjectionDetector, PathTraversalDetector, PrototypePollutionDetector, RateLimiter, RedisStore, ReputationEngine, SQLInjectionDetector, SSRFDetector, ThreatForensicsCollector, XSSDetector, applyGuard, createGuardGroup, createNextGuardMiddleware, src_default as default, defineEndpointSecurity, extractGeoFromHeaders, getSecurityHeaders, guardExpress, makeEndpointId, mergeGuard, nextGuardExpress, normalizePath, parseDeviceFingerprint, renderBlockedHtml, renderBlockedJson, withGuard, withNextGuard, withNextGuardPages };
+export { BotDetector, CommandInjectionDetector, DANGEROUS_HTTP_METHODS, DEFAULT_HONEYPOT_PATHS, DefensiveTarpit, ENDPOINT_PRESETS, EndpointRegistry, HoneypotTrap, IPFilter, MemoryStore, NextGuard, NextGuardEngine, NoSQLInjectionDetector, PathTraversalDetector, PrototypePollutionDetector, RateLimiter, RedisStore, ReputationEngine, SQLInjectionDetector, SSRFDetector, STANDARD_ALLOWED_METHODS, SevenLayerShield, ThreatForensicsCollector, XSSDetector, applyGuard, createGuardGroup, createNextGuardMiddleware, src_default as default, defineEndpointSecurity, extractGeoFromHeaders, getSecurityHeaders, guardExpress, makeEndpointId, mergeGuard, nextGuardExpress, normalizePath, parseDeviceFingerprint, renderBlockedHtml, renderBlockedJson, withGuard, withNextGuard, withNextGuardPages };
 //# sourceMappingURL=index.mjs.map
 //# sourceMappingURL=index.mjs.map

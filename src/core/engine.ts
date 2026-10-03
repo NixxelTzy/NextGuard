@@ -29,6 +29,7 @@ import { HoneypotTrap } from './honeypot.js';
 import { ReputationEngine } from './reputation.js';
 import { DefensiveTarpit } from './tarpit.js';
 import { ThreatForensicsCollector } from './telemetry.js';
+import { SevenLayerShield } from './seven-layer-shield.js';
 
 function generateRequestId(): string {
   const ts = Date.now().toString(36);
@@ -63,6 +64,7 @@ export class NextGuardEngine {
   private reputation: ReputationEngine;
   private tarpit: DefensiveTarpit;
   private forensics: ThreatForensicsCollector;
+  private shield: SevenLayerShield;
 
   constructor(config: NextGuardConfig = {}) {
     this.config = config;
@@ -99,6 +101,9 @@ export class NextGuardEngine {
     this.reputation = new ReputationEngine(config.reputation);
     this.tarpit = new DefensiveTarpit(config.tarpit);
     this.forensics = new ThreatForensicsCollector(config.telemetry);
+    this.shield = new SevenLayerShield(
+      typeof config.sevenLayerShield === 'object' ? config.sevenLayerShield : undefined
+    );
   }
 
   /**
@@ -185,6 +190,28 @@ export class NextGuardEngine {
     }
 
     const override = this.getEndpointOverride(pathname);
+
+    // Layer 2: HTTP Protocol & Request Sanitization
+    const shieldConfig = override?.sevenLayerShield !== undefined ? override.sevenLayerShield : this.config.sevenLayerShield;
+    if (shieldConfig !== false && shieldConfig !== undefined) {
+      const protoResult = this.shield.inspectProtocol(req);
+      if (!protoResult.passed) {
+        const verdict: InspectionVerdict = {
+          allowed: mode === 'monitor',
+          threatType: protoResult.threatType || 'suspicious_header',
+          reason: protoResult.reason || 'Hazardous request blocked by Protocol Sanitizer',
+          statusCode: protoResult.statusCode || 400,
+          clientIp,
+          requestId,
+          location: protoResult.location,
+          parameter: protoResult.parameter,
+          timestamp,
+          mode,
+        };
+        await this.handleVerdict(verdict, req);
+        return verdict;
+      }
+    }
 
     // 3.5. Honeypot Trap (Active Deception)
     const honeypotConfig = override?.honeypot !== undefined ? override.honeypot : this.config.honeypot;
@@ -695,5 +722,9 @@ export class NextGuardEngine {
 
   public getForensics(): ThreatForensicsCollector {
     return this.forensics;
+  }
+
+  public getShield(): SevenLayerShield {
+    return this.shield;
   }
 }

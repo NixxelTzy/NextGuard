@@ -55,6 +55,8 @@ export { IPFilter } from './core/ip-filter.js';
 export { HoneypotTrap, DEFAULT_HONEYPOT_PATHS } from './core/honeypot.js';
 export { ReputationEngine } from './core/reputation.js';
 export { DefensiveTarpit } from './core/tarpit.js';
+export { SevenLayerShield, DANGEROUS_HTTP_METHODS, STANDARD_ALLOWED_METHODS, } from './core/seven-layer-shield.js';
+export type { SevenLayerConfig, ShieldLayerId, ShieldLayerResult, } from './core/seven-layer-shield.js';
 export { MemoryStore } from './core/stores/memory-store.js';
 export { RedisStore } from './core/stores/redis-store.js';
 export { getSecurityHeaders } from './security/headers.js';

@@ -9,6 +9,7 @@ import { HoneypotTrap } from './honeypot.js';
 import { ReputationEngine } from './reputation.js';
 import { DefensiveTarpit } from './tarpit.js';
 import { ThreatForensicsCollector } from './telemetry.js';
+import { SevenLayerShield } from './seven-layer-shield.js';
 export declare class NextGuardEngine {
     private config;
     private sqliDetector;
@@ -25,6 +26,7 @@ export declare class NextGuardEngine {
     private reputation;
     private tarpit;
     private forensics;
+    private shield;
     constructor(config?: NextGuardConfig);
     /**
      * Find matching endpoint override if defined in config.endpoints
@@ -41,5 +43,6 @@ export declare class NextGuardEngine {
     getHoneypot(): HoneypotTrap;
     getTarpit(): DefensiveTarpit;
     getForensics(): ThreatForensicsCollector;
+    getShield(): SevenLayerShield;
 }
 //# sourceMappingURL=engine.d.ts.map

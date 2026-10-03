@@ -225,6 +225,18 @@ export function NextGuard(options: NextGuardOptions = {}): NextGuardInstance {
         // Buat security headers untuk response blocked
         const blockedHeaders = new Headers(secHeaders as Record<string, string>);
 
+        // Layer 7: Active Exploit Neutralizer & Crash Terminator
+        if (mergedConfig.sevenLayerShield) {
+          const neutralized = activeEngine.getShield().neutralizeExploit(verdict);
+          for (const [hName, hVal] of Object.entries(neutralized.headers)) {
+            blockedHeaders.set(hName, hVal);
+          }
+          return new Response(JSON.stringify(neutralized.body), {
+            status: neutralized.statusCode,
+            headers: blockedHeaders,
+          });
+        }
+
         const accept = ctx.headers['accept'] || '';
         const wantsHtml = mergedConfig.htmlResponse !== false && typeof accept === 'string' && accept.includes('text/html');
 

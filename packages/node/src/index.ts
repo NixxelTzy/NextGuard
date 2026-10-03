@@ -239,6 +239,20 @@ export function NextGuard(options: NodeGuardOptions = {}): GuardInstance {
             );
           }
 
+          // Layer 7: Active Exploit Neutralizer & Crash Terminator
+          if (mergedConfig.sevenLayerShield) {
+            const neutralized = activeEngine.getShield().neutralizeExploit(verdict);
+            for (const [hName, hVal] of Object.entries(neutralized.headers)) {
+              res.setHeader(hName, hVal);
+            }
+            if (neutralized.shouldDestroySocket && req.socket?.destroy) {
+              req.socket.destroy();
+              return;
+            }
+            res.status(neutralized.statusCode).json(neutralized.body);
+            return;
+          }
+
           const accept = headers['accept'] || '';
           const isHtml = mergedConfig.htmlResponse && accept.includes('text/html');
 

@@ -193,6 +193,14 @@ export interface ReputationConfig {
   jailDurationMs?: number; // Initial jail duration (default: 1 hour)
 }
 
+export interface SevenLayerConfig {
+  enabled?: boolean;
+  neutralizeMode?: 'abort_stream' | 'synthetic_error' | 'standard_block';
+  allowedMethods?: string[];
+  maxHeaderSizeBytes?: number;
+  blockDangerousMethods?: boolean;
+}
+
 export interface EndpointRuleOverride {
   rateLimit?: RateLimitConfig | false;
   sqlInjection?: SQLiConfig | boolean;
@@ -206,6 +214,7 @@ export interface EndpointRuleOverride {
   payloadGuard?: PayloadGuardConfig | boolean;
   honeypot?: HoneypotConfig | boolean;
   tarpit?: TarpitConfig | boolean;
+  sevenLayerShield?: SevenLayerConfig | boolean;
 }
 
 export interface NextGuardConfig {
@@ -221,6 +230,7 @@ export interface NextGuardConfig {
   honeypot?: HoneypotConfig | boolean;
   tarpit?: TarpitConfig | boolean;
   reputation?: ReputationConfig | boolean;
+  sevenLayerShield?: SevenLayerConfig | boolean;
   telemetry?: boolean | {
     enabled?: boolean;
     maxHistory?: number;

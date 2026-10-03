@@ -1,0 +1,25 @@
+{
+  "name": "@nextguard/node",
+  "version": "1.0.0",
+  "description": "NextGuard single-install middleware for Node.js and Express — automatic endpoint discovery",
+  "author": "NextGuard Team",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --sourcemap --clean"
+  },
+  "peerDependencies": {
+    "nextguard": ">=1.0.0"
+  },
+  "keywords": ["nextguard", "express", "nodejs", "firewall", "middleware", "security", "waf"]
+}

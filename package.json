@@ -1,0 +1,57 @@
+{
+  "name": "nextguard",
+  "version": "1.0.0",
+  "description": "Production-ready Web Application Firewall (WAF) for Next.js and Node.js. Protects against DDoS, DoS, SQL Injection, XSS, Path Traversal, Command Injection, and Malicious Bots.",
+  "author": "NextGuard Team",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./next": {
+      "types": "./dist/middleware/nextjs.d.ts",
+      "import": "./dist/middleware/nextjs.mjs",
+      "require": "./dist/middleware/nextjs.js"
+    },
+    "./express": {
+      "types": "./dist/middleware/express.d.ts",
+      "import": "./dist/middleware/express.mjs",
+      "require": "./dist/middleware/express.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "nextjs",
+    "nodejs",
+    "firewall",
+    "waf",
+    "security",
+    "ddos",
+    "dos",
+    "rate-limit",
+    "sql-injection",
+    "xss",
+    "anti-ddos",
+    "express",
+    "middleware"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

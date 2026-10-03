@@ -81,6 +81,12 @@ export interface GuardInstance {
   getStats(): ReturnType<EndpointRegistry['getStats']>;
 
   /**
+   * Ambil log forensik ancaman (Device, OS, Lokasi, Koordinat, IP, Serangan).
+   * Berguna untuk menampilkan serangan di monitoring/dashboard website Anda.
+   */
+  getThreatLogs(limit?: number): any[];
+
+  /**
    * Registry internal (untuk akses penuh jika perlu).
    */
   readonly registry: EndpointRegistry;
@@ -269,6 +275,7 @@ export function NextGuard(options: NodeGuardOptions = {}): GuardInstance {
     protect,
     getDiscoveredEndpoints: () => registry.getAll(),
     getStats: () => registry.getStats(),
+    getThreatLogs: (limit = 100) => engine.getForensics().getHistory(limit),
     registry,
   };
 }
@@ -276,3 +283,5 @@ export function NextGuard(options: NodeGuardOptions = {}): GuardInstance {
 // Re-export types yang berguna untuk pengguna
 export type { NextGuardConfig, RequestContext, InspectionVerdict } from '../../../src/types.js';
 export { EndpointRegistry } from '../../../src/registry.js';
+export { ThreatForensicsCollector, parseDeviceFingerprint, extractGeoFromHeaders } from '../../../src/core/telemetry.js';
+export type { ThreatForensicRecord, GeoLocation, ClientDeviceFingerprint } from '../../../src/core/telemetry.js';

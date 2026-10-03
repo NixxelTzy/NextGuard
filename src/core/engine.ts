@@ -28,6 +28,7 @@ import { IPFilter } from './ip-filter.js';
 import { HoneypotTrap } from './honeypot.js';
 import { ReputationEngine } from './reputation.js';
 import { DefensiveTarpit } from './tarpit.js';
+import { ThreatForensicsCollector } from './telemetry.js';
 
 function generateRequestId(): string {
   const ts = Date.now().toString(36);
@@ -61,6 +62,7 @@ export class NextGuardEngine {
   private honeypot: HoneypotTrap;
   private reputation: ReputationEngine;
   private tarpit: DefensiveTarpit;
+  private forensics: ThreatForensicsCollector;
 
   constructor(config: NextGuardConfig = {}) {
     this.config = config;
@@ -96,6 +98,7 @@ export class NextGuardEngine {
     this.honeypot = new HoneypotTrap(config.honeypot);
     this.reputation = new ReputationEngine(config.reputation);
     this.tarpit = new DefensiveTarpit(config.tarpit);
+    this.forensics = new ThreatForensicsCollector(config.telemetry);
   }
 
   /**
@@ -124,6 +127,17 @@ export class NextGuardEngine {
     // Normalize URL path
     const urlObj = req.url.startsWith('http') ? new URL(req.url) : new URL(`http://localhost${req.url}`);
     const pathname = urlObj.pathname;
+
+    // Auto-populate query from URL if not already provided
+    if (!req.query || Object.keys(req.query).length === 0) {
+      const q: Record<string, string> = {};
+      urlObj.searchParams.forEach((val, k) => {
+        q[k] = val;
+      });
+      if (Object.keys(q).length > 0) {
+        req.query = q;
+      }
+    }
 
     // 1. Check excluded paths (e.g. Next.js static assets)
     if (this.config.excludePaths) {
@@ -645,7 +659,10 @@ export class NextGuardEngine {
       // 2. Defensive HTTP Tarpit (delay attacker response)
       await this.tarpit.delay(verdict.threatType);
 
-      // 3. User onBlocked callback
+      // 3. Threat Forensics & Device/Location Capture
+      await this.forensics.capture(verdict, req);
+
+      // 4. User onBlocked callback
       if (this.config.onBlocked) {
         try {
           await this.config.onBlocked(verdict, req);
@@ -674,5 +691,9 @@ export class NextGuardEngine {
 
   public getTarpit(): DefensiveTarpit {
     return this.tarpit;
+  }
+
+  public getForensics(): ThreatForensicsCollector {
+    return this.forensics;
   }
 }

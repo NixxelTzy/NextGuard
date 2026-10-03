@@ -105,6 +105,19 @@ export { RedisStore } from './core/stores/redis-store.js';
 export { getSecurityHeaders } from './security/headers.js';
 export { renderBlockedHtml, renderBlockedJson } from './templates/blocked-page.js';
 
+// Threat Forensics, Geolocation & Device Telemetry
+export {
+  ThreatForensicsCollector,
+  parseDeviceFingerprint,
+  extractGeoFromHeaders,
+} from './core/telemetry.js';
+export type {
+  ThreatForensicRecord,
+  GeoLocation,
+  ClientDeviceFingerprint,
+  TelemetryConfig,
+} from './core/telemetry.js';
+
 // Endpoint Registry (auto-discovery dari traffic aktual)
 export {
   EndpointRegistry,

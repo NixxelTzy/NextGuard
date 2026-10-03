@@ -59,6 +59,8 @@ export { MemoryStore } from './core/stores/memory-store.js';
 export { RedisStore } from './core/stores/redis-store.js';
 export { getSecurityHeaders } from './security/headers.js';
 export { renderBlockedHtml, renderBlockedJson } from './templates/blocked-page.js';
+export { ThreatForensicsCollector, parseDeviceFingerprint, extractGeoFromHeaders, } from './core/telemetry.js';
+export type { ThreatForensicRecord, GeoLocation, ClientDeviceFingerprint, TelemetryConfig, } from './core/telemetry.js';
 export { EndpointRegistry, normalizePath, makeEndpointId, } from './registry.js';
 export type { EndpointRecord, RegistryStats } from './registry.js';
 export { defineEndpointSecurity, mergeGuard, createGuardGroup, applyGuard, withGuard, guardExpress, } from './define.js';

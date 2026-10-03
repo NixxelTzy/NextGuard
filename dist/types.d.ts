@@ -185,6 +185,12 @@ export interface NextGuardConfig {
     honeypot?: HoneypotConfig | boolean;
     tarpit?: TarpitConfig | boolean;
     reputation?: ReputationConfig | boolean;
+    telemetry?: boolean | {
+        enabled?: boolean;
+        maxHistory?: number;
+        webhookUrl?: string;
+        geoResolver?: (ip: string, headers: Record<string, string>) => any;
+    };
     badBots?: BotConfig | boolean;
     ipFilter?: IPFilterConfig;
     payloadGuard?: PayloadGuardConfig;

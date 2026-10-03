@@ -5,15 +5,24 @@
 import { NextGuardConfig, RequestContext, InspectionVerdict } from '../types.js';
 import { RateLimiter } from './rate-limiter.js';
 import { IPFilter } from './ip-filter.js';
+import { HoneypotTrap } from './honeypot.js';
+import { ReputationEngine } from './reputation.js';
+import { DefensiveTarpit } from './tarpit.js';
 export declare class NextGuardEngine {
     private config;
     private sqliDetector;
+    private nosqliDetector;
+    private protoDetector;
+    private ssrfDetector;
     private xssDetector;
     private cmdDetector;
     private pathDetector;
     private botDetector;
     private rateLimiter;
     private ipFilter;
+    private honeypot;
+    private reputation;
+    private tarpit;
     constructor(config?: NextGuardConfig);
     /**
      * Find matching endpoint override if defined in config.endpoints
@@ -26,5 +35,8 @@ export declare class NextGuardEngine {
     private handleVerdict;
     getRateLimiter(): RateLimiter;
     getIPFilter(): IPFilter;
+    getReputation(): ReputationEngine;
+    getHoneypot(): HoneypotTrap;
+    getTarpit(): DefensiveTarpit;
 }
 //# sourceMappingURL=engine.d.ts.map

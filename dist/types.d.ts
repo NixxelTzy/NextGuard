@@ -1,7 +1,7 @@
 /**
  * NextGuard - Web Application Firewall (WAF) Type Definitions
  */
-export type ThreatType = 'sql_injection' | 'xss' | 'command_injection' | 'path_traversal' | 'rate_limit_exceeded' | 'bad_bot' | 'ip_blacklisted' | 'payload_too_large' | 'suspicious_header' | 'custom_rule_violation';
+export type ThreatType = 'sql_injection' | 'nosql_injection' | 'xss' | 'command_injection' | 'path_traversal' | 'prototype_pollution' | 'ssrf' | 'honeypot_triggered' | 'rate_limit_exceeded' | 'bad_bot' | 'ip_blacklisted' | 'payload_too_large' | 'suspicious_header' | 'custom_rule_violation';
 export type FirewallMode = 'enforce' | 'monitor';
 export type SensitivityLevel = 'low' | 'medium' | 'high';
 export interface RequestContext {
@@ -122,22 +122,69 @@ export interface CustomRule {
     statusCode?: number;
     reason?: string;
 }
+export interface HoneypotConfig {
+    enabled?: boolean;
+    trapPaths?: (string | RegExp)[];
+    jailDurationMs?: number;
+    tarpitDelayMs?: number;
+}
+export interface TarpitConfig {
+    enabled?: boolean;
+    delayMs?: number;
+    applyOnThreats?: ThreatType[];
+}
+export interface NoSQLiConfig {
+    enabled?: boolean;
+    inspectQuery?: boolean;
+    inspectBody?: boolean;
+    customPatterns?: RegExp[];
+}
+export interface PrototypePollutionConfig {
+    enabled?: boolean;
+    inspectQuery?: boolean;
+    inspectBody?: boolean;
+}
+export interface SSRFConfig {
+    enabled?: boolean;
+    inspectQuery?: boolean;
+    inspectBody?: boolean;
+    blockCloudMetadata?: boolean;
+    blockLoopback?: boolean;
+    blockPrivateNetworks?: boolean;
+}
+export interface ReputationConfig {
+    enabled?: boolean;
+    maxStrikes?: number;
+    windowMs?: number;
+    jailDurationMs?: number;
+}
 export interface EndpointRuleOverride {
     rateLimit?: RateLimitConfig | false;
     sqlInjection?: SQLiConfig | boolean;
+    nosqlInjection?: NoSQLiConfig | boolean;
     xss?: XSSConfig | boolean;
     commandInjection?: CommandInjectionConfig | boolean;
     pathTraversal?: PathTraversalConfig | boolean;
+    prototypePollution?: PrototypePollutionConfig | boolean;
+    ssrf?: SSRFConfig | boolean;
     badBots?: BotConfig | boolean;
     payloadGuard?: PayloadGuardConfig | boolean;
+    honeypot?: HoneypotConfig | boolean;
+    tarpit?: TarpitConfig | boolean;
 }
 export interface NextGuardConfig {
     mode?: FirewallMode;
     rateLimit?: RateLimitConfig | false;
     sqlInjection?: SQLiConfig | boolean;
+    nosqlInjection?: NoSQLiConfig | boolean;
     xss?: XSSConfig | boolean;
     commandInjection?: CommandInjectionConfig | boolean;
     pathTraversal?: PathTraversalConfig | boolean;
+    prototypePollution?: PrototypePollutionConfig | boolean;
+    ssrf?: SSRFConfig | boolean;
+    honeypot?: HoneypotConfig | boolean;
+    tarpit?: TarpitConfig | boolean;
+    reputation?: ReputationConfig | boolean;
     badBots?: BotConfig | boolean;
     ipFilter?: IPFilterConfig;
     payloadGuard?: PayloadGuardConfig;

@@ -181,6 +181,207 @@ var SQLInjectionDetector = class {
   }
 };
 
+// src/core/detectors/nosqli.ts
+var NOSQL_OPERATOR_PATTERNS = [
+  /^\$(?:where|regex|ne|gt|gte|lt|lte|in|nin|exists|type|mod|all|size|elemMatch|expr|jsonSchema|text|search|or|and|nor|not)\b/i,
+  /["']\$(?:where|regex|ne|gt|gte|lt|lte|in|nin|exists|type|mod|all|size|elemMatch|expr|or|and|nor|not)["']\s*:/i,
+  /\btojson\s*\(/i,
+  /\bmapreduce\s*\(/i,
+  /\bdb\.\w+\.(?:find|update|insert|remove|drop)\b/i
+];
+var NoSQLInjectionDetector = class {
+  patterns;
+  constructor(config) {
+    this.patterns = [...NOSQL_OPERATOR_PATTERNS];
+    if (config?.customPatterns) {
+      this.patterns.push(...config.customPatterns);
+    }
+  }
+  detectValue(val, paramName) {
+    if (val === null || val === void 0) return { detected: false };
+    if (typeof val === "number" || typeof val === "boolean") return { detected: false };
+    if (typeof val === "object") {
+      return this.detectObject(val, paramName);
+    }
+    const stringVal = String(val);
+    for (const pattern of this.patterns) {
+      if (pattern.test(stringVal)) {
+        return {
+          detected: true,
+          pattern: pattern.toString(),
+          matchedValue: stringVal.length > 100 ? stringVal.slice(0, 100) + "..." : stringVal,
+          parameter: paramName
+        };
+      }
+    }
+    return { detected: false };
+  }
+  detectObject(obj, prefix = "") {
+    if (!obj || typeof obj !== "object") {
+      return this.detectValue(obj, prefix);
+    }
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const res = this.detectValue(obj[i], `${prefix}[${i}]`);
+        if (res.detected) return res;
+      }
+      return { detected: false };
+    }
+    for (const [key, value] of Object.entries(obj)) {
+      const currentParam = prefix ? `${prefix}.${key}` : key;
+      if (key.startsWith("$")) {
+        for (const pattern of this.patterns) {
+          if (pattern.test(key)) {
+            return {
+              detected: true,
+              pattern: pattern.toString(),
+              matchedValue: key,
+              parameter: currentParam,
+              location: "parameter_key"
+            };
+          }
+        }
+      }
+      const res = this.detectValue(value, currentParam);
+      if (res.detected) return res;
+    }
+    return { detected: false };
+  }
+};
+
+// src/core/detectors/prototype-pollution.ts
+var POLLUTION_KEYS = [
+  /(?:^|\.)__proto__(?:\.|$|\[)/,
+  /(?:^|\.)constructor\.prototype(?:\.|$|\[)/,
+  /(?:^|\.)prototype(?:\.|$|\[)/,
+  /__defineGetter__/,
+  /__defineSetter__/,
+  /__lookupGetter__/,
+  /__lookupSetter__/
+];
+var PrototypePollutionDetector = class {
+  constructor(_config) {
+  }
+  detectValue(val, paramName) {
+    if (val === null || val === void 0) return { detected: false };
+    if (typeof val === "object") {
+      return this.detectObject(val, paramName);
+    }
+    const str = String(val);
+    for (const pattern of POLLUTION_KEYS) {
+      if (pattern.test(str)) {
+        return {
+          detected: true,
+          pattern: pattern.toString(),
+          matchedValue: str,
+          parameter: paramName
+        };
+      }
+    }
+    return { detected: false };
+  }
+  detectObject(obj, prefix = "") {
+    if (!obj || typeof obj !== "object") {
+      return this.detectValue(obj, prefix);
+    }
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const res = this.detectValue(obj[i], `${prefix}[${i}]`);
+        if (res.detected) return res;
+      }
+      return { detected: false };
+    }
+    for (const [key, value] of Object.entries(obj)) {
+      const currentParam = prefix ? `${prefix}.${key}` : key;
+      for (const pattern of POLLUTION_KEYS) {
+        if (pattern.test(key) || pattern.test(currentParam)) {
+          return {
+            detected: true,
+            pattern: pattern.toString(),
+            matchedValue: key,
+            parameter: currentParam,
+            location: "parameter_key"
+          };
+        }
+      }
+      const res = this.detectValue(value, currentParam);
+      if (res.detected) return res;
+    }
+    return { detected: false };
+  }
+};
+
+// src/core/detectors/ssrf.ts
+var SSRF_PATTERNS = [
+  // Cloud metadata services (AWS, GCP, Azure, Alibaba)
+  /https?:\/\/169\.254\.169\.254\b/i,
+  /https?:\/\/metadata\.google\.internal\b/i,
+  /https?:\/\/100\.100\.100\.200\b/i,
+  // Loopback addresses
+  /https?:\/\/127\.(?:\d{1,3}\.){2}\d{1,3}\b/i,
+  /https?:\/\/localhost\b/i,
+  /https?:\/\/0\.0\.0\.0(?::\d+|\/|$|\b)/i,
+  /https?:\/\/\[::1\](?::\d+|\/|$)/i,
+  /https?:\/\/0x7f000001\b/i,
+  // hex encoded 127.0.0.1
+  /https?:\/\/2130706433\b/i,
+  // dword encoded 127.0.0.1
+  // Private network ranges (RFC 1918)
+  /https?:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/i,
+  /https?:\/\/172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b/i,
+  /https?:\/\/192\.168\.\d{1,3}\.\d{1,3}\b/i,
+  // Dangerous non-HTTP schemes
+  /(?:file|gopher|dict|ldap|tftp|sftp):\/\//i
+];
+var SSRFDetector = class {
+  patterns;
+  constructor(config) {
+    this.patterns = [...SSRF_PATTERNS];
+  }
+  detectValue(val, paramName) {
+    if (val === null || val === void 0) return { detected: false };
+    if (typeof val === "number" || typeof val === "boolean") return { detected: false };
+    if (typeof val === "object") {
+      return this.detectObject(val, paramName);
+    }
+    const str = String(val);
+    let decoded = str;
+    try {
+      decoded = decodeURIComponent(str);
+    } catch {
+    }
+    for (const pattern of this.patterns) {
+      if (pattern.test(str) || pattern.test(decoded)) {
+        return {
+          detected: true,
+          pattern: pattern.toString(),
+          matchedValue: str.length > 100 ? str.slice(0, 100) + "..." : str,
+          parameter: paramName
+        };
+      }
+    }
+    return { detected: false };
+  }
+  detectObject(obj, prefix = "") {
+    if (!obj || typeof obj !== "object") {
+      return this.detectValue(obj, prefix);
+    }
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const res = this.detectValue(obj[i], `${prefix}[${i}]`);
+        if (res.detected) return res;
+      }
+      return { detected: false };
+    }
+    for (const [key, value] of Object.entries(obj)) {
+      const currentParam = prefix ? `${prefix}.${key}` : key;
+      const res = this.detectValue(value, currentParam);
+      if (res.detected) return res;
+    }
+    return { detected: false };
+  }
+};
+
 // src/core/detectors/xss.ts
 var XSS_PATTERNS = {
   // Direct script tags
@@ -696,9 +897,11 @@ var RateLimiter = class {
       return defaultAllowedResult;
     }
     const key = overrideConfig?.keyGenerator ? overrideConfig.keyGenerator(req) : this.generateKey(req);
-    const jailed = await this.store.isJailed(key);
-    if (jailed) {
-      const entry = await this.store.get(key);
+    const isIpJailed = await this.store.isJailed(req.ip);
+    const isKeyJailed = !isIpJailed && await this.store.isJailed(key);
+    const jailedKey = isIpJailed ? req.ip : isKeyJailed ? key : null;
+    if (jailedKey) {
+      const entry = await this.store.get(jailedKey);
       const remainingJailSec = entry?.jailUntil ? Math.max(1, Math.ceil((entry.jailUntil - Date.now()) / 1e3)) : Math.ceil(jailDuration / 1e3);
       return {
         allowed: false,
@@ -757,6 +960,12 @@ var RateLimiter = class {
       isJailed: false,
       headers
     };
+  }
+  async jailKey(key, durationMs) {
+    await this.store.jail(key, durationMs);
+  }
+  getStore() {
+    return this.store;
   }
 };
 
@@ -866,6 +1075,177 @@ var IPFilter = class {
   }
 };
 
+// src/core/honeypot.ts
+var DEFAULT_HONEYPOT_PATHS = [
+  /^\/\.env(?:\..*)?$/i,
+  /^\/\.git(?:\/.*)?$/i,
+  /^\/\.aws(?:\/.*)?$/i,
+  /^\/\.ssh(?:\/.*)?$/i,
+  /^\/wp-admin(?:\/.*)?$/i,
+  /^\/wp-login\.php$/i,
+  /^\/wp-content(?:\/.*)?$/i,
+  /^\/xmlrpc\.php$/i,
+  /^\/phpmyadmin(?:\/.*)?$/i,
+  /^\/pma(?:\/.*)?$/i,
+  /^\/myadmin(?:\/.*)?$/i,
+  /^\/actuator(?:\/.*)?$/i,
+  /^\/solr(?:\/.*)?$/i,
+  /^\/autodiscover\/autodiscover\.xml$/i,
+  /^\/web\.config$/i,
+  /^\/\.ds_store$/i,
+  /^\/id_rsa$/i,
+  /^\/backup(?:\.sql|\.tar|\.zip|\.gz)?$/i,
+  /^\/dump\.sql$/i
+];
+var HoneypotTrap = class {
+  enabled;
+  trapPaths;
+  jailDurationMs;
+  constructor(config) {
+    if (typeof config === "boolean") {
+      this.enabled = config;
+      this.trapPaths = [...DEFAULT_HONEYPOT_PATHS];
+      this.jailDurationMs = 24 * 60 * 60 * 1e3;
+    } else {
+      this.enabled = config?.enabled ?? true;
+      this.trapPaths = config?.trapPaths ?? [...DEFAULT_HONEYPOT_PATHS];
+      this.jailDurationMs = config?.jailDurationMs ?? 24 * 60 * 60 * 1e3;
+    }
+  }
+  isTrap(pathname) {
+    if (!this.enabled) return false;
+    const normalized = pathname.toLowerCase();
+    for (const pattern of this.trapPaths) {
+      if (pattern instanceof RegExp) {
+        if (pattern.test(normalized)) return true;
+      } else if (typeof pattern === "string") {
+        if (pattern.endsWith("*")) {
+          const base = pattern.slice(0, -1).toLowerCase();
+          if (normalized.startsWith(base)) return true;
+        } else if (pattern.toLowerCase() === normalized) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  getJailDuration() {
+    return this.jailDurationMs;
+  }
+};
+
+// src/core/reputation.ts
+var THREAT_STRIKE_WEIGHTS = {
+  honeypot_triggered: 5,
+  command_injection: 5,
+  prototype_pollution: 5,
+  sql_injection: 3,
+  nosql_injection: 3,
+  ssrf: 3,
+  path_traversal: 3,
+  xss: 3,
+  bad_bot: 2,
+  rate_limit_exceeded: 1,
+  payload_too_large: 1,
+  suspicious_header: 1,
+  custom_rule_violation: 2,
+  ip_blacklisted: 5
+};
+var ReputationEngine = class {
+  enabled;
+  maxStrikes;
+  windowMs;
+  baseJailMs;
+  records = /* @__PURE__ */ new Map();
+  constructor(config) {
+    if (typeof config === "boolean") {
+      this.enabled = config;
+      this.maxStrikes = 5;
+      this.windowMs = 60 * 60 * 1e3;
+      this.baseJailMs = 15 * 60 * 1e3;
+    } else {
+      this.enabled = config?.enabled ?? false;
+      this.maxStrikes = config?.maxStrikes ?? 5;
+      this.windowMs = config?.windowMs ?? 60 * 60 * 1e3;
+      this.baseJailMs = config?.jailDurationMs ?? 15 * 60 * 1e3;
+    }
+  }
+  /**
+   * Adds strikes for a detected threat.
+   * Returns whether the IP should now be jailed and for how many milliseconds.
+   */
+  addStrike(ip, threat) {
+    if (!this.enabled || ip === "127.0.0.1" || ip === "::1") {
+      return { shouldJail: false, jailDurationMs: 0, totalStrikes: 0 };
+    }
+    const now = Date.now();
+    let record = this.records.get(ip);
+    if (!record || now - record.lastStrikeTime > this.windowMs) {
+      record = { strikes: 0, lastStrikeTime: now, jailCount: record ? record.jailCount : 0 };
+      this.records.set(ip, record);
+    }
+    const weight = threat ? THREAT_STRIKE_WEIGHTS[threat] ?? 1 : 1;
+    record.strikes += weight;
+    record.lastStrikeTime = now;
+    if (record.strikes >= this.maxStrikes) {
+      record.jailCount++;
+      record.strikes = 0;
+      let multiplier = 1;
+      if (record.jailCount === 2) multiplier = 8;
+      else if (record.jailCount === 3) multiplier = 96;
+      else if (record.jailCount >= 4) multiplier = 672;
+      const jailDurationMs = this.baseJailMs * multiplier;
+      return {
+        shouldJail: true,
+        jailDurationMs,
+        totalStrikes: record.strikes
+      };
+    }
+    return {
+      shouldJail: false,
+      jailDurationMs: 0,
+      totalStrikes: record.strikes
+    };
+  }
+  getRecord(ip) {
+    return this.records.get(ip);
+  }
+  clear() {
+    this.records.clear();
+  }
+};
+
+// src/core/tarpit.ts
+var DefensiveTarpit = class {
+  enabled;
+  delayMs;
+  applyOnThreats;
+  constructor(config) {
+    if (typeof config === "boolean") {
+      this.enabled = config;
+      this.delayMs = 3e3;
+      this.applyOnThreats = null;
+    } else {
+      this.enabled = config?.enabled ?? false;
+      this.delayMs = config?.delayMs ?? 3e3;
+      this.applyOnThreats = config?.applyOnThreats ? new Set(config.applyOnThreats) : null;
+    }
+  }
+  /**
+   * Applies delay if tarpit is enabled for this threat type
+   */
+  async delay(threat) {
+    if (!this.enabled) return;
+    if (this.applyOnThreats && threat && !this.applyOnThreats.has(threat)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+  }
+  isEnabled() {
+    return this.enabled;
+  }
+};
+
 // src/core/engine.ts
 function generateRequestId() {
   const ts = Date.now().toString(36);
@@ -885,16 +1265,28 @@ function matchPath(pattern, path) {
 var NextGuardEngine = class {
   config;
   sqliDetector;
+  nosqliDetector;
+  protoDetector;
+  ssrfDetector;
   xssDetector;
   cmdDetector;
   pathDetector;
   botDetector;
   rateLimiter;
   ipFilter;
+  honeypot;
+  reputation;
+  tarpit;
   constructor(config = {}) {
     this.config = config;
     const sqliCfg = typeof config.sqlInjection === "object" ? config.sqlInjection : {};
     this.sqliDetector = new SQLInjectionDetector(sqliCfg);
+    const nosqliCfg = typeof config.nosqlInjection === "object" ? config.nosqlInjection : {};
+    this.nosqliDetector = new NoSQLInjectionDetector(nosqliCfg);
+    const protoCfg = typeof config.prototypePollution === "object" ? config.prototypePollution : {};
+    this.protoDetector = new PrototypePollutionDetector(protoCfg);
+    const ssrfCfg = typeof config.ssrf === "object" ? config.ssrf : {};
+    this.ssrfDetector = new SSRFDetector(ssrfCfg);
     const xssCfg = typeof config.xss === "object" ? config.xss : {};
     this.xssDetector = new XSSDetector(xssCfg);
     const cmdCfg = typeof config.commandInjection === "object" ? config.commandInjection : {};
@@ -906,6 +1298,9 @@ var NextGuardEngine = class {
     const rlCfg = typeof config.rateLimit === "object" ? config.rateLimit : void 0;
     this.rateLimiter = new RateLimiter(rlCfg);
     this.ipFilter = new IPFilter(config.ipFilter);
+    this.honeypot = new HoneypotTrap(config.honeypot);
+    this.reputation = new ReputationEngine(config.reputation);
+    this.tarpit = new DefensiveTarpit(config.tarpit);
   }
   /**
    * Find matching endpoint override if defined in config.endpoints
@@ -969,6 +1364,24 @@ var NextGuardEngine = class {
       return verdict2;
     }
     const override = this.getEndpointOverride(pathname);
+    const honeypotConfig = override?.honeypot !== void 0 ? override.honeypot : this.config.honeypot;
+    if (honeypotConfig !== false && this.honeypot.isTrap(pathname)) {
+      const jailDuration = this.honeypot.getJailDuration();
+      await this.rateLimiter.jailKey(clientIp, jailDuration);
+      const verdict2 = {
+        allowed: mode === "monitor",
+        threatType: "honeypot_triggered",
+        reason: `Honeypot trap triggered: ${pathname}. Scanner IP automatically jailed.`,
+        statusCode: 403,
+        clientIp,
+        requestId,
+        location: "url",
+        timestamp,
+        mode
+      };
+      await this.handleVerdict(verdict2, req);
+      return verdict2;
+    }
     const botConfig = override?.badBots !== void 0 ? override.badBots : this.config.badBots;
     if (botConfig !== false) {
       const userAgentHeader = req.headers["user-agent"];
@@ -1136,6 +1549,115 @@ var NextGuardEngine = class {
         }
       }
     }
+    const nosqliConfig = override?.nosqlInjection !== void 0 ? override.nosqlInjection : this.config.nosqlInjection;
+    if (nosqliConfig !== false) {
+      if (req.query) {
+        const qResult = this.nosqliDetector.detectObject(req.query, "query");
+        if (qResult.detected) {
+          const verdict2 = {
+            allowed: mode === "monitor",
+            threatType: "nosql_injection",
+            reason: `NoSQL Injection detected in parameter: ${qResult.parameter}`,
+            matchedPattern: qResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: "query",
+            parameter: qResult.parameter,
+            timestamp,
+            mode
+          };
+          await this.handleVerdict(verdict2, req);
+          return verdict2;
+        }
+      }
+      if (req.body) {
+        const bResult = this.nosqliDetector.detectObject(req.body, "body");
+        if (bResult.detected) {
+          const verdict2 = {
+            allowed: mode === "monitor",
+            threatType: "nosql_injection",
+            reason: `NoSQL Injection detected in body: ${bResult.parameter}`,
+            matchedPattern: bResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: "body",
+            parameter: bResult.parameter,
+            timestamp,
+            mode
+          };
+          await this.handleVerdict(verdict2, req);
+          return verdict2;
+        }
+      }
+    }
+    const protoConfig = override?.prototypePollution !== void 0 ? override.prototypePollution : this.config.prototypePollution;
+    if (protoConfig !== false) {
+      if (req.query) {
+        const qResult = this.protoDetector.detectObject(req.query, "query");
+        if (qResult.detected) {
+          const verdict2 = {
+            allowed: mode === "monitor",
+            threatType: "prototype_pollution",
+            reason: `Prototype pollution attempt detected in parameter: ${qResult.parameter}`,
+            matchedPattern: qResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: "query",
+            parameter: qResult.parameter,
+            timestamp,
+            mode
+          };
+          await this.handleVerdict(verdict2, req);
+          return verdict2;
+        }
+      }
+      if (req.body) {
+        const bResult = this.protoDetector.detectObject(req.body, "body");
+        if (bResult.detected) {
+          const verdict2 = {
+            allowed: mode === "monitor",
+            threatType: "prototype_pollution",
+            reason: `Prototype pollution attempt detected in body: ${bResult.parameter}`,
+            matchedPattern: bResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: "body",
+            parameter: bResult.parameter,
+            timestamp,
+            mode
+          };
+          await this.handleVerdict(verdict2, req);
+          return verdict2;
+        }
+      }
+    }
+    const ssrfConfig = override?.ssrf !== void 0 ? override.ssrf : this.config.ssrf;
+    if (ssrfConfig !== false && ssrfConfig !== void 0) {
+      if (req.query) {
+        const qResult = this.ssrfDetector.detectObject(req.query, "query");
+        if (qResult.detected) {
+          const verdict2 = {
+            allowed: mode === "monitor",
+            threatType: "ssrf",
+            reason: `SSRF target address detected in query parameter: ${qResult.parameter}`,
+            matchedPattern: qResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: "query",
+            parameter: qResult.parameter,
+            timestamp,
+            mode
+          };
+          await this.handleVerdict(verdict2, req);
+          return verdict2;
+        }
+      }
+    }
     const xssConfig = override?.xss !== void 0 ? override.xss : this.config.xss;
     if (xssConfig !== false) {
       if (req.query) {
@@ -1261,6 +1783,13 @@ var NextGuardEngine = class {
   }
   async handleVerdict(verdict, req) {
     if (!verdict.allowed || verdict.mode === "monitor") {
+      if (verdict.clientIp && verdict.threatType) {
+        const { shouldJail, jailDurationMs } = this.reputation.addStrike(verdict.clientIp, verdict.threatType);
+        if (shouldJail) {
+          await this.rateLimiter.jailKey(verdict.clientIp, jailDurationMs);
+        }
+      }
+      await this.tarpit.delay(verdict.threatType);
       if (this.config.onBlocked) {
         try {
           await this.config.onBlocked(verdict, req);
@@ -1275,6 +1804,15 @@ var NextGuardEngine = class {
   }
   getIPFilter() {
     return this.ipFilter;
+  }
+  getReputation() {
+    return this.reputation;
+  }
+  getHoneypot() {
+    return this.honeypot;
+  }
+  getTarpit() {
+    return this.tarpit;
   }
 };
 
@@ -1473,6 +2011,14 @@ function formatThreatTitle(threat) {
   switch (threat) {
     case "sql_injection":
       return "SQL Injection Detected";
+    case "nosql_injection":
+      return "NoSQL Injection Detected";
+    case "prototype_pollution":
+      return "Prototype Pollution Detected";
+    case "ssrf":
+      return "Server-Side Request Forgery (SSRF) Detected";
+    case "honeypot_triggered":
+      return "Security Tripwire / Honeypot Triggered";
     case "xss":
       return "Cross-Site Scripting (XSS) Detected";
     case "command_injection":
@@ -2446,16 +2992,23 @@ var src_default = NextGuard;
 
 exports.BotDetector = BotDetector;
 exports.CommandInjectionDetector = CommandInjectionDetector;
+exports.DEFAULT_HONEYPOT_PATHS = DEFAULT_HONEYPOT_PATHS;
+exports.DefensiveTarpit = DefensiveTarpit;
 exports.ENDPOINT_PRESETS = ENDPOINT_PRESETS;
 exports.EndpointRegistry = EndpointRegistry;
+exports.HoneypotTrap = HoneypotTrap;
 exports.IPFilter = IPFilter;
 exports.MemoryStore = MemoryStore;
 exports.NextGuard = NextGuard;
 exports.NextGuardEngine = NextGuardEngine;
+exports.NoSQLInjectionDetector = NoSQLInjectionDetector;
 exports.PathTraversalDetector = PathTraversalDetector;
+exports.PrototypePollutionDetector = PrototypePollutionDetector;
 exports.RateLimiter = RateLimiter;
 exports.RedisStore = RedisStore;
+exports.ReputationEngine = ReputationEngine;
 exports.SQLInjectionDetector = SQLInjectionDetector;
+exports.SSRFDetector = SSRFDetector;
 exports.XSSDetector = XSSDetector;
 exports.applyGuard = applyGuard;
 exports.createGuardGroup = createGuardGroup;

@@ -16,12 +16,18 @@ import {
   BotConfig,
 } from '../types.js';
 import { SQLInjectionDetector } from './detectors/sqli.js';
+import { NoSQLInjectionDetector } from './detectors/nosqli.js';
+import { PrototypePollutionDetector } from './detectors/prototype-pollution.js';
+import { SSRFDetector } from './detectors/ssrf.js';
 import { XSSDetector } from './detectors/xss.js';
 import { CommandInjectionDetector } from './detectors/command-injection.js';
 import { PathTraversalDetector } from './detectors/path-traversal.js';
 import { BotDetector } from './detectors/bot.js';
 import { RateLimiter } from './rate-limiter.js';
 import { IPFilter } from './ip-filter.js';
+import { HoneypotTrap } from './honeypot.js';
+import { ReputationEngine } from './reputation.js';
+import { DefensiveTarpit } from './tarpit.js';
 
 function generateRequestId(): string {
   const ts = Date.now().toString(36);
@@ -43,18 +49,33 @@ function matchPath(pattern: string | RegExp, path: string): boolean {
 export class NextGuardEngine {
   private config: NextGuardConfig;
   private sqliDetector: SQLInjectionDetector;
+  private nosqliDetector: NoSQLInjectionDetector;
+  private protoDetector: PrototypePollutionDetector;
+  private ssrfDetector: SSRFDetector;
   private xssDetector: XSSDetector;
   private cmdDetector: CommandInjectionDetector;
   private pathDetector: PathTraversalDetector;
   private botDetector: BotDetector;
   private rateLimiter: RateLimiter;
   private ipFilter: IPFilter;
+  private honeypot: HoneypotTrap;
+  private reputation: ReputationEngine;
+  private tarpit: DefensiveTarpit;
 
   constructor(config: NextGuardConfig = {}) {
     this.config = config;
 
     const sqliCfg = typeof config.sqlInjection === 'object' ? config.sqlInjection : {};
     this.sqliDetector = new SQLInjectionDetector(sqliCfg);
+
+    const nosqliCfg = typeof config.nosqlInjection === 'object' ? config.nosqlInjection : {};
+    this.nosqliDetector = new NoSQLInjectionDetector(nosqliCfg);
+
+    const protoCfg = typeof config.prototypePollution === 'object' ? config.prototypePollution : {};
+    this.protoDetector = new PrototypePollutionDetector(protoCfg);
+
+    const ssrfCfg = typeof config.ssrf === 'object' ? config.ssrf : {};
+    this.ssrfDetector = new SSRFDetector(ssrfCfg);
 
     const xssCfg = typeof config.xss === 'object' ? config.xss : {};
     this.xssDetector = new XSSDetector(xssCfg);
@@ -72,6 +93,9 @@ export class NextGuardEngine {
     this.rateLimiter = new RateLimiter(rlCfg);
 
     this.ipFilter = new IPFilter(config.ipFilter);
+    this.honeypot = new HoneypotTrap(config.honeypot);
+    this.reputation = new ReputationEngine(config.reputation);
+    this.tarpit = new DefensiveTarpit(config.tarpit);
   }
 
   /**
@@ -147,6 +171,27 @@ export class NextGuardEngine {
     }
 
     const override = this.getEndpointOverride(pathname);
+
+    // 3.5. Honeypot Trap (Active Deception)
+    const honeypotConfig = override?.honeypot !== undefined ? override.honeypot : this.config.honeypot;
+    if (honeypotConfig !== false && this.honeypot.isTrap(pathname)) {
+      const jailDuration = this.honeypot.getJailDuration();
+      await this.rateLimiter.jailKey(clientIp, jailDuration);
+
+      const verdict: InspectionVerdict = {
+        allowed: mode === 'monitor',
+        threatType: 'honeypot_triggered',
+        reason: `Honeypot trap triggered: ${pathname}. Scanner IP automatically jailed.`,
+        statusCode: 403,
+        clientIp,
+        requestId,
+        location: 'url',
+        timestamp,
+        mode,
+      };
+      await this.handleVerdict(verdict, req);
+      return verdict;
+    }
 
     // 4. Bad Bot / Vulnerability Scanner check
     const botConfig = override?.badBots !== undefined ? override.badBots : this.config.badBots;
@@ -336,6 +381,123 @@ export class NextGuardEngine {
       }
     }
 
+    // 8.5. NoSQL Injection Check
+    const nosqliConfig = override?.nosqlInjection !== undefined ? override.nosqlInjection : this.config.nosqlInjection;
+    if (nosqliConfig !== false) {
+      if (req.query) {
+        const qResult = this.nosqliDetector.detectObject(req.query, 'query');
+        if (qResult.detected) {
+          const verdict: InspectionVerdict = {
+            allowed: mode === 'monitor',
+            threatType: 'nosql_injection',
+            reason: `NoSQL Injection detected in parameter: ${qResult.parameter}`,
+            matchedPattern: qResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: 'query',
+            parameter: qResult.parameter,
+            timestamp,
+            mode,
+          };
+          await this.handleVerdict(verdict, req);
+          return verdict;
+        }
+      }
+
+      if (req.body) {
+        const bResult = this.nosqliDetector.detectObject(req.body, 'body');
+        if (bResult.detected) {
+          const verdict: InspectionVerdict = {
+            allowed: mode === 'monitor',
+            threatType: 'nosql_injection',
+            reason: `NoSQL Injection detected in body: ${bResult.parameter}`,
+            matchedPattern: bResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: 'body',
+            parameter: bResult.parameter,
+            timestamp,
+            mode,
+          };
+          await this.handleVerdict(verdict, req);
+          return verdict;
+        }
+      }
+    }
+
+    // 8.6. Prototype Pollution Check
+    const protoConfig = override?.prototypePollution !== undefined ? override.prototypePollution : this.config.prototypePollution;
+    if (protoConfig !== false) {
+      if (req.query) {
+        const qResult = this.protoDetector.detectObject(req.query, 'query');
+        if (qResult.detected) {
+          const verdict: InspectionVerdict = {
+            allowed: mode === 'monitor',
+            threatType: 'prototype_pollution',
+            reason: `Prototype pollution attempt detected in parameter: ${qResult.parameter}`,
+            matchedPattern: qResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: 'query',
+            parameter: qResult.parameter,
+            timestamp,
+            mode,
+          };
+          await this.handleVerdict(verdict, req);
+          return verdict;
+        }
+      }
+
+      if (req.body) {
+        const bResult = this.protoDetector.detectObject(req.body, 'body');
+        if (bResult.detected) {
+          const verdict: InspectionVerdict = {
+            allowed: mode === 'monitor',
+            threatType: 'prototype_pollution',
+            reason: `Prototype pollution attempt detected in body: ${bResult.parameter}`,
+            matchedPattern: bResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: 'body',
+            parameter: bResult.parameter,
+            timestamp,
+            mode,
+          };
+          await this.handleVerdict(verdict, req);
+          return verdict;
+        }
+      }
+    }
+
+    // 8.7. SSRF Check
+    const ssrfConfig = override?.ssrf !== undefined ? override.ssrf : this.config.ssrf;
+    if (ssrfConfig !== false && ssrfConfig !== undefined) {
+      if (req.query) {
+        const qResult = this.ssrfDetector.detectObject(req.query, 'query');
+        if (qResult.detected) {
+          const verdict: InspectionVerdict = {
+            allowed: mode === 'monitor',
+            threatType: 'ssrf',
+            reason: `SSRF target address detected in query parameter: ${qResult.parameter}`,
+            matchedPattern: qResult.pattern,
+            statusCode: 403,
+            clientIp,
+            requestId,
+            location: 'query',
+            parameter: qResult.parameter,
+            timestamp,
+            mode,
+          };
+          await this.handleVerdict(verdict, req);
+          return verdict;
+        }
+      }
+    }
+
     // 9. Cross-Site Scripting (XSS) Check
     const xssConfig = override?.xss !== undefined ? override.xss : this.config.xss;
     if (xssConfig !== false) {
@@ -472,6 +634,18 @@ export class NextGuardEngine {
 
   private async handleVerdict(verdict: InspectionVerdict, req: RequestContext): Promise<void> {
     if (!verdict.allowed || verdict.mode === 'monitor') {
+      // 1. Adaptive IP Reputation & Auto-Jail Strike System
+      if (verdict.clientIp && verdict.threatType) {
+        const { shouldJail, jailDurationMs } = this.reputation.addStrike(verdict.clientIp, verdict.threatType);
+        if (shouldJail) {
+          await this.rateLimiter.jailKey(verdict.clientIp, jailDurationMs);
+        }
+      }
+
+      // 2. Defensive HTTP Tarpit (delay attacker response)
+      await this.tarpit.delay(verdict.threatType);
+
+      // 3. User onBlocked callback
       if (this.config.onBlocked) {
         try {
           await this.config.onBlocked(verdict, req);
@@ -488,5 +662,17 @@ export class NextGuardEngine {
 
   public getIPFilter(): IPFilter {
     return this.ipFilter;
+  }
+
+  public getReputation(): ReputationEngine {
+    return this.reputation;
+  }
+
+  public getHoneypot(): HoneypotTrap {
+    return this.honeypot;
+  }
+
+  public getTarpit(): DefensiveTarpit {
+    return this.tarpit;
   }
 }

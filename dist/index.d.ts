@@ -43,12 +43,18 @@ export declare class NextGuard {
 export default NextGuard;
 export { NextGuardEngine, createNextGuardMiddleware, withNextGuard, withNextGuardPages, nextGuardExpress, };
 export { SQLInjectionDetector } from './core/detectors/sqli.js';
+export { NoSQLInjectionDetector } from './core/detectors/nosqli.js';
+export { PrototypePollutionDetector } from './core/detectors/prototype-pollution.js';
+export { SSRFDetector } from './core/detectors/ssrf.js';
 export { XSSDetector } from './core/detectors/xss.js';
 export { CommandInjectionDetector } from './core/detectors/command-injection.js';
 export { PathTraversalDetector } from './core/detectors/path-traversal.js';
 export { BotDetector } from './core/detectors/bot.js';
 export { RateLimiter } from './core/rate-limiter.js';
 export { IPFilter } from './core/ip-filter.js';
+export { HoneypotTrap, DEFAULT_HONEYPOT_PATHS } from './core/honeypot.js';
+export { ReputationEngine } from './core/reputation.js';
+export { DefensiveTarpit } from './core/tarpit.js';
 export { MemoryStore } from './core/stores/memory-store.js';
 export { RedisStore } from './core/stores/redis-store.js';
 export { getSecurityHeaders } from './security/headers.js';

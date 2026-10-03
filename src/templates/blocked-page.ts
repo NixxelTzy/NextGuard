@@ -178,6 +178,14 @@ function formatThreatTitle(threat?: string): string {
   switch (threat) {
     case 'sql_injection':
       return 'SQL Injection Detected';
+    case 'nosql_injection':
+      return 'NoSQL Injection Detected';
+    case 'prototype_pollution':
+      return 'Prototype Pollution Detected';
+    case 'ssrf':
+      return 'Server-Side Request Forgery (SSRF) Detected';
+    case 'honeypot_triggered':
+      return 'Security Tripwire / Honeypot Triggered';
     case 'xss':
       return 'Cross-Site Scripting (XSS) Detected';
     case 'command_injection':

@@ -67,10 +67,13 @@ export class RateLimiter {
 
     const key = overrideConfig?.keyGenerator ? overrideConfig.keyGenerator(req) : this.generateKey(req);
 
-    // 1. Check if the client is currently jailed
-    const jailed = await this.store.isJailed(key);
-    if (jailed) {
-      const entry = await this.store.get(key);
+    // 1. Check if the IP itself is jailed or the specific key is jailed
+    const isIpJailed = await this.store.isJailed(req.ip);
+    const isKeyJailed = !isIpJailed && (await this.store.isJailed(key));
+    const jailedKey = isIpJailed ? req.ip : isKeyJailed ? key : null;
+
+    if (jailedKey) {
+      const entry = await this.store.get(jailedKey);
       const remainingJailSec = entry?.jailUntil
         ? Math.max(1, Math.ceil((entry.jailUntil - Date.now()) / 1000))
         : Math.ceil(jailDuration / 1000);
@@ -140,5 +143,13 @@ export class RateLimiter {
       isJailed: false,
       headers,
     };
+  }
+
+  public async jailKey(key: string, durationMs: number): Promise<void> {
+    await this.store.jail(key, durationMs);
+  }
+
+  public getStore(): RateLimitStore {
+    return this.store;
   }
 }

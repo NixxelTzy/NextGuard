@@ -1,32 +1,145 @@
 # 🛡️ NextGuard
 
-**Production-ready Web Application Firewall (WAF) untuk Next.js dan Node.js**
+<p align="center">
+  <strong>Enterprise-Grade Web Application Firewall (WAF) & Active Defense Shield untuk Node.js dan Next.js</strong><br>
+  <em>Perlindungan 7 Lapis, Automatic Endpoint Discovery, Deteksi Multi-Vektor, dan Active Exploit Neutralizer.</em>
+</p>
 
-Proteksi komprehensif terhadap ancaman web paling umum — **DDoS, DoS, SQL Injection, XSS, Command Injection, Path Traversal, dan Malicious Bots** — dalam satu package yang mudah diinstall.
+<p align="center">
+  <a href="https://github.com/NixxelTzy/NextGuard"><img src="https://img.shields.io/badge/NextGuard-v1.0.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/NixxelTzy/NextGuard/actions"><img src="https://img.shields.io/badge/tests-127%20passed-brightgreen.svg" alt="Tests"></a>
+  <a href="https://github.com/NixxelTzy/NextGuard/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18.0.0-orange.svg" alt="Node Version"></a>
+</p>
 
 ---
 
-## ✨ Fitur Utama
+## 📑 Daftar Isi
 
-| Fitur | Deskripsi |
-|---|---|
-| 🚦 **Rate Limiting & Anti-DoS** | Sliding window counter dengan auto IP Jail (mirip Fail2ban) |
-| 💉 **SQL Injection Detection** | Pattern matching multi-layer: tautology, UNION, time-based blind, schema extraction |
-| ⚡ **XSS Protection** | Deteksi script tags, event handler inline, javascript: URI, HTML entity bypass |
-| 🖥️ **Command Injection** | Deteksi shell chaining, reverse shell, substitusi command |
-| 📂 **Path Traversal / LFI** | Deteksi `../`, null-byte, PHP wrappers, file sensitif sistem |
-| 🤖 **Bad Bot / Scanner Detection** | Blokir sqlmap, nikto, acunetix, dirbuster, nuclei, wfuzz, dll |
-| 🌐 **IP Filtering + CIDR** | Whitelist/Blacklist dengan dukungan subnet notation (e.g. `10.0.0.0/8`) |
-| 📦 **Payload Guard** | Proteksi dari oversized payload yang bisa menyebabkan DoS |
-| 🔒 **Security Headers** | CSP, HSTS, X-Frame-Options, X-Content-Type-Options, dan lainnya |
-| 🛠️ **Custom Rules** | Buat aturan keamanan sendiri dengan fungsi sync/async |
-| 🔴 **Monitor Mode** | Log ancaman tanpa memblokir — cocok untuk testing dan staging |
-| 🗂️ **Per-Endpoint Config** | Override konfigurasi firewall per route/endpoint |
-| 🔄 **Redis Store** | Distributed rate limiting untuk multi-instance / serverless |
+- [✨ Gambaran Umum](#-gambaran-umum)
+- [🧱 Arsitektur Firewall 7 Lapis](#-arsitektur-firewall-7-lapis)
+- [💥 Fitur Active Exploit Neutralizer (Crash Response)](#-fitur-active-exploit-neutralizer-crash-response)
+- [📦 Instalasi](#-instalasi)
+- [🚀 Quick Start (Setup 1 Kali Saja)](#-quick-start-setup-1-kali-saja)
+  - [1. Node.js / Express (`@nextguard/node`)](#1-nodejs--express-nextguardnode)
+  - [2. Next.js (`@nextguard/next`)](#2-nextjs-nextguardnext)
+- [🎯 Contoh Proteksi Endpoint Nyata](#-contoh-proteksi-endpoint-nyata)
+- [🔍 Automatic Endpoint Discovery & Telemetri](#-automatic-endpoint-discovery--telemetri)
+- [📍 Pelacakan Geolocation, Koordinat & Perangkat Penyerang](#-pelacakan-geolocation-koordinat--perangkat-penyerang)
+- [🍯 Active Deception (Honeypot Trap) & Reputasi IP (Fail2Ban)](#-active-deception-honeypot-trap--reputasi-ip-fail2ban)
+- [🔔 Integrasi Webhook (Discord / Slack)](#-integrasi-webhook-discord--slack)
+- [⚙️ Referensi Konfigurasi Lengkap](#️-referensi-konfigurasi-lengkap)
+- [🧪 Pengujian & Verifikasi](#-pengujian--verifikasi)
+
+---
+
+## ✨ Gambaran Umum
+
+**NextGuard** dirancang khusus untuk melindungi aplikasi Node.js (Express, Fastify, Connect) dan Next.js (App Router & Pages Router) dari serangan siber modern. Cukup dipasang **SATU KALI** di entry point utama aplikasi, seluruh endpoint Anda otomatis terproteksi tanpa perlu mengimpor firewall di setiap file route.
+
+### 🛡️ Fitur-Fitur Utama
+
+1. **Firewall 7 Lapis (*7-Layer Defense-in-Depth*):** Penyaringan berurutan dari layer jaringan hingga payload aplikasi.
+2. **Active Exploit Neutralizer:** Memaksa request serangan menjadi **error fatal** (`ERR_EXPLOIT_PAYLOAD_NEUTRALIZED`) dan langsung memutus koneksi TCP (`Connection: close`), merusak loop automated scanner (Python, cURL, sqlmap) seketika.
+3. **Automatic Endpoint Discovery:** Menemukan dan mencatat semua endpoint aktif langsung dari traffic nyata (bukan scan source code, tanpa input daftar manual).
+4. **Anti-DDoS & Sliding-Window Rate Limiting:** Pembatasan request cerdas per IP/token dengan auto-jail instan bagi penyerang yang membanjiri server.
+5. **Multi-Vector Exploit Engine:**
+   - 💉 **SQL Injection (SQLi):** Tautologi (`' OR 1=1`), UNION SELECT, blind time-based, dsb.
+   - 🍃 **NoSQL Injection (NoSQLi):** Injeksi operator MongoDB (`$where`, `$gt`, `$ne`, `$regex`, `$in`).
+   - ⚡ **Cross-Site Scripting (XSS):** Script tag, event inline handler, `javascript:` URI, dsb.
+   - 🖥️ **Command Injection:** Shell piping (`|`, `;`, `&&`), reverse shells, command substitution.
+   - 📂 **Path Traversal / LFI:** `../`, null-byte injection (`%00`), PHP wrappers, sistem file sensitif.
+   - 🧬 **Prototype Pollution:** Manipulasi objek JavaScript (`__proto__`, `constructor.prototype`).
+   - 🌐 **SSRF (Server-Side Request Forgery):** Cloud metadata (`169.254.169.254`), loopback (`127.0.0.1`, `localhost`), IP privat RFC 1918.
+6. **Active Deception & Honeypot:** Jalur jebakan (`/.env`, `/.git`, `/wp-admin`, dll.) yang langsung mengkarantina IP penyerang selama 24 jam.
+7. **Adaptive IP Reputation (Fail2Ban-Style):** Sistem strike penalti bertingkat (15 menit ➔ 2 jam ➔ 24 jam ➔ 7 hari).
+8. **Threat Forensics & Telemetry:** Mengambil lokasi negara, kota, koordinat (lintang/bujur), sistem operasi, jenis perangkat, dan alat yang digunakan dalam serangan.
+
+---
+
+## 🧱 Arsitektur Firewall 7 Lapis
+
+```
+[ TRAFFIC MASUK DARI CLIENT / INTERNET ]
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 1: Network & IP Governance                                      │
+│  • Whitelist & Blacklist IP instan                                     │
+│  • CIDR Subnet range filtering (e.g. 10.0.0.0/8)                       │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 2: HTTP Protocol & Request Smuggling Sanitizer                  │
+│  • Blokir method terlarang (TRACE, TRACK, CONNECT, DEBUG)               │
+│  • Deteksi Request Smuggling (Conflicting Content-Length/Chunked)       │
+│  • Sanitasi CRLF injection (HTTP Splitting) & Null-Byte di header      │
+│  • Header overflow protection (431 Header Too Large)                    │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 3: Volumetric Anti-DDoS & Burst Suppression                    │
+│  • Sliding window rate limiter per IP / User token                      │
+│  • Burst spike arrest (meredam lonjakan request mendadak)              │
+│  • Auto-jail instan bagi penyerang yang membanjiri traffic             │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 4: Active Deception & Tripwire Honeypot                          │
+│  • Jebakan endpoint pemindai (/.env, /.git, /wp-admin, dll.)           │
+│  • Penyerang otomatis terdeteksi & diisolasi 24 jam penuh               │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 5: Automated Scanner & Malicious Bot Defense                     │
+│  • Signature pemindai kerentanan (sqlmap, nikto, nuclei, acunetix)      │
+│  • Deteksi User-Agent kosong, palsu, atau CLI script                    │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 6: Deep Content & Multi-Vector Exploit Inspection               │
+│  • SQL Injection, NoSQL Injection, XSS, Command Injection              │
+│  • Path Traversal, Prototype Pollution, SSRF                           │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────────┐
+│  LAPIS 7: Active Exploit Neutralizer & Crash Terminator 💥              │
+│  • Mengubah payload menjadi error sintetis yang merusak script penyerang│
+│  • Pemutusan koneksi seketika (Connection: close / TCP Stream Abort)    │
+│  • Serangan langsung terhenti dan gagal mengeksekusi                    │
+└───────────────────┬─────────────────────────────────────────────────────┘
+                    │
+      [ REQUEST AMAN DITERUSKAN KE ENDPOINT WEBSITE ASLI ]
+```
+
+---
+
+## 💥 Fitur Active Exploit Neutralizer (Crash Response)
+
+Saat penyerang mengirimkan payload eksploitasi, NextGuard **tidak hanya memblokir**, tetapi **secara aktif merusak jalannya script penyerang**:
+
+1. **Pemutusan Koneksi TCP Seketika (`Connection: close` / `destroySocket`):**
+   Memicu error jaringan fatal pada script penyerang (`ECONNRESET`, `Connection reset by peer`, `Broken Pipe`).
+2. **Respons Error Sintetis (`ERR_EXPLOIT_PAYLOAD_NEUTRALIZED`):**
+   Format respons khusus yang menyebabkan parser otomatis penyerang gagal parsing dan crash seketika:
+   ```json
+   {
+     "error": "ERR_EXPLOIT_PAYLOAD_NEUTRALIZED",
+     "status": "attack_intercepted",
+     "layer": "Layer_7_Exploit_Neutralizer",
+     "threat": "command_injection",
+     "reason": "Remote OS Command Injection detected in parameter: cmd",
+     "code": "E_EXPLOIT_ABORTED",
+     "message": "The incoming exploit vector was intercepted and neutralized. Execution terminated immediately.",
+     "requestId": "ng_m7k29a_b9x1c2",
+     "timestamp": 1728000000000
+   }
+   ```
 
 ---
 
 ## 📦 Instalasi
+
+Install core library NextGuard ke proyek Anda:
 
 ```bash
 npm install nextguard
@@ -38,405 +151,352 @@ pnpm add nextguard
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Setup 1 Kali Saja)
 
-### 1. Next.js — Global Middleware (`middleware.ts`)
+### 1. Node.js / Express (`@nextguard/node`)
 
-Tempatkan file ini di root proyek Next.js kamu:
-
-```ts
-// middleware.ts
-import { createNextGuardMiddleware } from 'nextguard';
-
-export const middleware = createNextGuardMiddleware({
-  rateLimit: {
-    windowMs: 60 * 1000, // 1 menit
-    max: 100,            // max 100 request per menit per IP
-  },
-  sqlInjection: { enabled: true },
-  xss: { enabled: true },
-  commandInjection: { enabled: true },
-  pathTraversal: { enabled: true },
-  badBots: { blockEmptyUserAgent: true },
-  onBlocked: (verdict) => {
-    console.warn(`Blocked ${verdict.threatType} from ${verdict.clientIp}`);
-  },
-});
-
-export const config = {
-  // Terapkan ke semua route kecuali assets statis
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
-};
-```
-
----
-
-### 2. Next.js — App Router per Route (`app/api/.../route.ts`)
+Cukup pasang **SATU KALI** di server utama (`server.js` atau `index.ts`). Semua routes di bawahnya otomatis terlindungi tanpa perlu mengimpor NextGuard di file controller masing-masing:
 
 ```ts
-// app/api/login/route.ts
-import { withNextGuard } from 'nextguard';
-
-async function handler(req: Request): Promise<Response> {
-  const body = await req.json();
-  // ... logic login kamu
-  return Response.json({ token: 'xxx' });
-}
-
-// Proteksi endpoint login dengan rate limit ketat
-export const POST = withNextGuard(handler, {
-  rateLimit: {
-    windowMs: 60 * 1000,
-    max: 5,              // Hanya 5 percobaan login per menit
-    jailDurationMs: 15 * 60 * 1000, // Banned 15 menit jika flooding
-  },
-  sqlInjection: { sensitivity: 'high' },
-  xss: { enabled: true },
-});
-```
-
----
-
-### 3. Next.js — Pages Router (`pages/api/...ts`)
-
-```ts
-// pages/api/users/index.ts
-import { withNextGuardPages } from 'nextguard';
-import type { NextApiRequest, NextApiResponse } from 'next';
-
-async function handler(req: NextApiRequest, res: NextApiResponse) {
-  res.status(200).json({ users: [] });
-}
-
-export default withNextGuardPages(handler, {
-  rateLimit: { max: 50, windowMs: 60 * 1000 },
-  sqlInjection: { enabled: true },
-  xss: { enabled: true },
-});
-```
-
----
-
-### 4. Express.js / Node.js
-
-```ts
-// server.ts
 import express from 'express';
-import { nextGuardExpress } from 'nextguard';
+import { NextGuard } from '@nextguard/node';
 
 const app = express();
 app.use(express.json());
 
-// Terapkan firewall secara global
-app.use(nextGuardExpress({
-  rateLimit: { windowMs: 60 * 1000, max: 100 },
-  sqlInjection: { enabled: true },
-  xss: { enabled: true },
-  commandInjection: { enabled: true },
-  pathTraversal: { enabled: true },
-  badBots: { knownScanners: true },
-  securityHeaders: { enabled: true },
-}));
-
-app.get('/api/users', (req, res) => {
-  res.json({ users: [] });
+// Inisialisasi NextGuard Firewall
+const guard = NextGuard({
+  apiKey: process.env.NEXTGUARD_KEY,
+  // Aktifkan Firewall 7 Lapis & Exploit Neutralizer
+  sevenLayerShield: {
+    enabled: true,
+    neutralizeMode: 'synthetic_error', // atau 'abort_stream'
+  },
+  // Aktifkan telemetri & monitoring
+  telemetry: { enabled: true, maxHistory: 500 },
 });
 
-app.listen(3000);
+// Pasang middleware SATU KALI di entry point
+app.use(guard.middleware());
+
+// ========================================================
+// SEMUA ENDPOINT DI BAWAH INI OTOMATIS TERLINDUNGI 100%!
+// Anda TIDAK PERLU mengimpor NextGuard di setiap file route.
+// ========================================================
+
+app.get('/api/users', (req, res) => res.json({ users: ['Alice', 'Bob'] }));
+app.post('/api/upload', (req, res) => res.json({ uploaded: true }));
+app.post('/api/payment', (req, res) => res.json({ status: 'paid' }));
+app.delete('/api/account', (req, res) => res.json({ deleted: true }));
+
+app.listen(3000, () => console.log('Server berjalan terlindungi di port 3000'));
 ```
 
 ---
 
-## ⚙️ Konfigurasi Lengkap
+### 2. Next.js (`@nextguard/next`)
+
+Di Next.js (baik **App Router** maupun **Pages Router**), cukup pasang satu kali di root file `middleware.ts`:
 
 ```ts
-import { createNextGuardMiddleware } from 'nextguard';
+// middleware.ts
+import { NextGuard } from '@nextguard/next';
 
-createNextGuardMiddleware({
-  // Mode: 'enforce' = blokir ancaman, 'monitor' = hanya log tanpa blokir
+export const guard = NextGuard({
+  apiKey: process.env.NEXTGUARD_KEY,
+  sevenLayerShield: {
+    enabled: true,
+    neutralizeMode: 'synthetic_error',
+  },
+  telemetry: { enabled: true },
+});
+
+// Export default middleware handler
+export default guard.middleware();
+
+export const config = {
+  // Tangkap seluruh request dinamis
+  matcher: '/:path*',
+};
+```
+
+Setiap file di `app/api/login/route.ts`, `app/api/upload/route.ts`, atau `pages/api/users.ts` **tidak perlu mengimpor NextGuard**. Next.js Middleware otomatis mencegat dan mensterilkan setiap request sebelum sampai ke handler route.
+
+---
+
+## 🎯 Contoh Proteksi Endpoint Nyata
+
+Berikut adalah contoh skenario bagaimana NextGuard secara otomatis mengamankan berbagai jenis endpoint Anda dari serangan eksploitasi:
+
+### Skenario 1: Endpoint Otentikasi (`POST /api/login`)
+* **Serangan:** Penyerang mengirim payload SQL Injection di form username: `' OR 1=1 --`.
+* **Aksi NextGuard:** Terdeteksi di Layer 6 (SQLi Detector) dan dinetralisir di Layer 7.
+* **Hasil:** Request ditolak dengan kode `400 Bad Request` dan error `ERR_EXPLOIT_PAYLOAD_NEUTRALIZED`. Fungsi otentikasi database Anda tidak pernah tersentuh.
+
+```ts
+// app/api/login/route.ts (Next.js) atau controllers/auth.js (Express)
+// KODE BERSIH: Tidak ada boiler-plate firewall sama sekali!
+export async function POST(req: Request) {
+  const { username, password } = await req.json();
+  // Hanya request yang 100% steril yang akan sampai ke sini
+  const user = await db.findUser(username, password);
+  return Response.json({ user });
+}
+```
+
+### Skenario 2: Endpoint Upload File (`POST /api/upload`)
+* **Serangan:** Penyerang mencoba Path Traversal untuk menulis file ke direktori sistem: `../../../../etc/shadow`.
+* **Aksi NextGuard:** Terdeteksi di Layer 6 (Path Traversal / LFI Detector).
+* **Hasil:** Request dibatalkan seketika sebelum file apapun tersimpan di server.
+
+### Skenario 3: Endpoint Transaksi & Pembayaran (`POST /api/payment`)
+* **Serangan:** Penyerang membanjiri ribuan transaksi palsu (DDoS/Spam) atau mencoba manipulasi NoSQL: `{"amount": {"$gt": 0}}`.
+* **Aksi NextGuard:** Meredam lonjakan request di Layer 3 (Anti-DDoS Sliding Window) dan memblokir operator NoSQL di Layer 6.
+
+### Skenario 4: Optional Per-Endpoint Protection (Aturan Khusus)
+Jika Anda ingin aturan yang jauh lebih ketat khusus pada endpoint tertentu (misal: proteksi brute-force login maksimal 5 request per menit):
+
+```ts
+// Opsional: override aturan untuk endpoint sensitif
+guard.protect('/api/login', {
+  rateLimit: {
+    max: 5,               // Maksimal 5 percobaan
+    windowMs: 60 * 1000,  // per 1 menit
+    jailDurationMs: 15 * 60 * 1000, // Ban 15 menit jika melebihi batas
+  },
+  sqlInjection: { sensitivity: 'high' },
+});
+```
+
+---
+
+## 🔍 Automatic Endpoint Discovery & Telemetri
+
+NextGuard otomatis mendeteksi endpoint dari **request aktual** yang masuk. Anda tidak perlu mendaftarkan endpoint secara manual.
+
+Untuk melihat daftar endpoint yang ditemukan beserta statistik trafiknya:
+
+```ts
+// Ambil seluruh endpoint yang ditemukan dari trafik nyata
+const endpoints = guard.getDiscoveredEndpoints();
+console.log(endpoints);
+
+/* Output:
+[
+  {
+    id: "GET:/api/users",
+    method: "GET",
+    path: "/api/users",
+    requestCount: 142,
+    allowedCount: 142,
+    blockedCount: 0,
+    lastStatusCode: 200,
+    firstSeen: 1728001000000,
+    lastSeen: 1728003400000
+  },
+  {
+    id: "POST:/api/login",
+    method: "POST",
+    path: "/api/login",
+    requestCount: 35,
+    allowedCount: 32,
+    blockedCount: 3, // 3 serangan dicegat!
+    lastStatusCode: 400
+  }
+]
+*/
+
+// Ambil ringkasan statistik
+const stats = guard.getStats();
+console.log(stats);
+// { totalEndpoints: 5, totalRequests: 540, totalBlocked: 12, totalAllowed: 528 }
+```
+
+---
+
+## 📍 Pelacakan Geolocation, Koordinat & Perangkat Penyerang
+
+NextGuard dilengkapi modul forensik cerdas yang melacak identitas fisik penyerang secara defensif:
+
+```ts
+// Ambil 50 log serangan terakhir
+const threatLogs = guard.getThreatLogs(50);
+
+threatLogs.forEach(attack => {
+  console.log(`[ATTACK INTERCEPTED]`);
+  console.log(`IP Penyerang : ${attack.clientIp}`);
+  console.log(`Negara & Kota: ${attack.geo.city}, ${attack.geo.countryCode}`);
+  console.log(`Koordinat    : Lintang ${attack.geo.coordinates?.latitude}, Bujur ${attack.geo.coordinates?.longitude}`);
+  console.log(`Perangkat    : ${attack.client.deviceType} (${attack.client.os})`);
+  console.log(`Browser/Tool : ${attack.client.browser}`); // e.g. "sqlmap (Exploit Scanner)"
+  console.log(`Jenis Serangan: ${attack.threat.type}`);
+  console.log(`Keparahan    : ${attack.threat.severity}`); // "critical" | "high" | "medium" | "low"
+});
+```
+
+### Membuat Endpoint Monitoring untuk Dashboard Website Anda:
+
+```ts
+// Express / Node.js
+app.get('/api/admin/security-monitoring', (req, res) => {
+  // Hanya admin yang boleh akses
+  res.json({
+    status: 'active',
+    totalAttacksBlocked: guard.getThreatLogs().length,
+    activeEndpoints: guard.getDiscoveredEndpoints(),
+    recentAttacks: guard.getThreatLogs(20),
+  });
+});
+```
+
+---
+
+## 🍯 Active Deception (Honeypot Trap) & Reputasi IP (Fail2Ban)
+
+### 1. Honeypot Tripwire
+NextGuard secara default memasang jebakan pada rute yang sering dicari oleh bot scanner otomatis:
+- `/.env`, `/.env.local`
+- `/.git/config`, `/.git/HEAD`
+- `/wp-admin`, `/wp-login.php`
+- `/phpmyadmin`, `/pma`
+- `/.aws/credentials`, `/.ssh/id_rsa`
+- `/actuator/health`, `/backup.sql`
+
+Jika ada client yang mengakses rute-rute ini, **IP client tersebut 100% dipastikan bot scanner berbahaya** dan langsung **di-jail otomatis selama 24 jam**.
+
+### 2. Reputasi Bertingkat (Fail2Ban Penalty)
+Setiap ancaman menambahkan poin *strike*:
+- Serangan Kritis (Command Injection, Honeypot, Prototype Pollution): Langsung di-jail!
+- Serangan Berat (SQLi, NoSQLi, XSS, SSRF): +3 strikes.
+- Durasi ban meningkat secara eksponensial bagi pelanggar berulang:
+  - Pelanggaran ke-1: **15 menit**
+  - Pelanggaran ke-2: **2 jam**
+  - Pelanggaran ke-3: **24 jam**
+  - Pelanggaran ke-4+: **7 hari penuh**
+
+---
+
+## 🔔 Integrasi Webhook (Discord / Slack)
+
+Dapatkan notifikasi instan saat serangan berbahaya terjadi di server Anda:
+
+```ts
+const guard = NextGuard({
+  telemetry: {
+    enabled: true,
+    // Cukup masukkan URL Webhook Discord atau Slack
+    webhookUrl: 'https://discord.com/api/webhooks/123456789/abcdefgh',
+  },
+});
+```
+
+NextGuard otomatis mengirimkan embed kaya dengan rincian **IP Penyerang, Lokasi, Koordinat, Perangkat, Jenis Exploit, dan Target Endpoint**.
+
+---
+
+## ⚙️ Referensi Konfigurasi Lengkap
+
+```ts
+const guard = NextGuard({
+  // Mode firewall: 'enforce' (blokir aktif) atau 'monitor' (hanya log)
   mode: 'enforce',
 
-  // --- Anti-DDoS & Rate Limiting ---
+  // --- 1. Firewall 7 Lapis & Exploit Neutralizer ---
+  sevenLayerShield: {
+    enabled: true,
+    neutralizeMode: 'synthetic_error', // 'synthetic_error' | 'abort_stream' | 'standard_block'
+    blockDangerousMethods: true,        // Blokir TRACE, TRACK, CONNECT, DEBUG
+    maxHeaderSizeBytes: 16384,          // Maks 16KB header (mencegah buffer overflow)
+  },
+
+  // --- 2. Anti-DDoS & Rate Limiting ---
   rateLimit: {
     enabled: true,
-    windowMs: 60 * 1000,         // Jendela waktu (ms), default: 1 menit
-    max: 100,                    // Maks request per jendela waktu
-    jailThreshold: 200,          // Auto-jail jika melewati threshold ini
-    jailDurationMs: 5 * 60 * 1000, // Durasi ban (ms), default: 5 menit
-    headers: true,               // Kirim X-RateLimit-* headers
-    keyGenerator: (req) => req.ip, // Fungsi kustom untuk membuat key
+    windowMs: 60 * 1000,         // Jendela waktu (1 menit)
+    max: 100,                    // Maks 100 request/menit
+    jailThreshold: 200,          // Auto-jail jika mencapai 200 request
+    jailDurationMs: 5 * 60 * 1000, // Durasi jail awal: 5 menit
   },
 
-  // --- SQL Injection Protection ---
-  sqlInjection: {
-    enabled: true,
-    sensitivity: 'medium', // 'low' | 'medium' | 'high'
-    inspectQuery: true,    // Inspect query params
-    inspectBody: true,     // Inspect request body
-    inspectHeaders: false, // Inspect request headers
-    customPatterns: [/my_custom_sqli_regex/i], // Tambah pattern sendiri
-    excludePatterns: [/safe_pattern/],         // Kecualikan pattern tertentu
-  },
+  // --- 3. Detektor Eksploitasi ---
+  sqlInjection: { enabled: true, sensitivity: 'medium' },
+  nosqlInjection: { enabled: true },
+  xss: { enabled: true, sensitivity: 'medium' },
+  commandInjection: { enabled: true },
+  pathTraversal: { enabled: true },
+  prototypePollution: { enabled: true },
+  ssrf: { enabled: true, blockCloudMetadata: true, blockLoopback: true },
+  badBots: { enabled: true, knownScanners: true, blockEmptyUserAgent: true },
 
-  // --- XSS Protection ---
-  xss: {
-    enabled: true,
-    sensitivity: 'medium',
-    inspectQuery: true,
-    inspectBody: true,
-    customPatterns: [],
-  },
+  // --- 4. Active Deception & Tarpit ---
+  honeypot: { enabled: true, jailDurationMs: 24 * 60 * 60 * 1000 },
+  reputation: { enabled: true, maxStrikes: 5 },
+  tarpit: { enabled: false, delayMs: 3000 }, // Opsional: perlambat bot 3 detik
 
-  // --- Command Injection Protection ---
-  commandInjection: {
-    enabled: true,
-    inspectQuery: true,
-    inspectBody: true,
-    customPatterns: [],
-  },
-
-  // --- Path Traversal & LFI/RFI Protection ---
-  pathTraversal: {
-    enabled: true,
-    inspectUrl: true,
-    inspectQuery: true,
-    inspectBody: true,
-    customPatterns: [],
-  },
-
-  // --- Bot & Scanner Detection ---
-  badBots: {
-    enabled: true,
-    blockEmptyUserAgent: false, // Blokir request tanpa User-Agent
-    knownScanners: true,        // Blokir sqlmap, nikto, acunetix, dll
-    customBlacklist: ['BadBot/1.0', /evilcrawler/i],
-    whitelist: [/googlebot/i, /bingbot/i], // Whitelist bot yang diizinkan
-  },
-
-  // --- IP Filtering (Supports CIDR) ---
+  // --- 5. IP Whitelist / Blacklist ---
   ipFilter: {
-    whitelist: ['127.0.0.1', '10.0.0.0/8', '192.168.1.0/24'],
-    blacklist: ['198.51.100.0/24'],
-    trustProxy: true,                  // Percaya X-Forwarded-For header
-    customIpHeader: 'cf-connecting-ip', // Header kustom untuk IP (Cloudflare, dll)
+    whitelist: ['127.0.0.1', '192.168.1.0/24'], // IP aman
+    blacklist: ['203.0.113.50'],                 // IP dilarang
   },
 
-  // --- Payload Size Guard ---
-  payloadGuard: {
-    enabled: true,
-    maxBodySize: 10 * 1024 * 1024, // 10MB default
-  },
-
-  // --- Security Response Headers ---
+  // --- 6. Security Headers ---
   securityHeaders: {
     enabled: true,
     xFrameOptions: 'DENY',
     xContentTypeOptions: true,
-    strictTransportSecurity: 'max-age=31536000; includeSubDomains; preload',
-    referrerPolicy: 'strict-origin-when-cross-origin',
-    permissionsPolicy: 'camera=(), microphone=(), geolocation=()',
-    contentSecurityPolicy: "default-src 'self'",
+    strictTransportSecurity: 'max-age=31536000; includeSubDomains',
   },
 
-  // --- Per-Endpoint Rule Overrides ---
-  endpoints: {
-    '/api/login': {
-      rateLimit: { max: 5, windowMs: 60 * 1000, jailDurationMs: 15 * 60 * 1000 },
-    },
-    '/api/upload': {
-      payloadGuard: { maxBodySize: 50 * 1024 * 1024 }, // 50MB untuk upload
-    },
-    '/api/public': {
-      rateLimit: { max: 500 }, // Rate limit lebih longgar
-      xss: false,              // Matikan XSS check untuk endpoint ini
-    },
-  },
+  // --- 7. Jalur yang Dilewati ---
+  excludePaths: ['/_next/*', '/favicon.ico', '/public/*'],
 
-  // --- Exclude Paths (Tidak di-check firewall) ---
-  excludePaths: [
-    '/_next/*',
-    '/favicon.ico',
-    '/robots.txt',
-    /^\/public\/.*/,
-  ],
-
-  // --- Custom Rules ---
-  customRules: [
-    {
-      name: 'require_auth',
-      description: 'Wajib ada Authorization header untuk /api/private/*',
-      evaluate: async (req) => {
-        if (!req.url.startsWith('/api/private/')) return false;
-        return !req.headers['authorization'];
-      },
-      action: 'block',
-      statusCode: 401,
-      reason: 'Authorization required',
-    },
-  ],
-
-  // --- Callback Hooks ---
+  // --- 8. Event Callbacks ---
   onBlocked: (verdict, req) => {
-    console.error(`[SECURITY] ${verdict.threatType} blocked from ${verdict.clientIp}: ${verdict.reason}`);
-    // Bisa: kirim alert, simpan ke DB, kirim ke SIEM, dll
-  },
-
-  onAllowed: (verdict, req) => {
-    // Dipanggil untuk setiap request yang diizinkan (gunakan dengan hati-hati — dapat verbose)
-  },
-
-  // Tampilkan HTML block page untuk browser request (mirip Cloudflare)
-  htmlResponse: true,
-});
-```
-
----
-
-## 🔴 Monitor Mode
-
-Gunakan `mode: 'monitor'` untuk **mendeteksi ancaman tanpa memblokir**. Berguna saat testing atau pertama kali deploy.
-
-```ts
-createNextGuardMiddleware({
-  mode: 'monitor', // Hanya log, tidak blokir!
-  onBlocked: (verdict) => {
-    console.warn(`[MONITOR] Would have blocked: ${verdict.threatType} from ${verdict.clientIp}`);
-    // Kirim ke logging service: DataDog, Sentry, LogFlare, dll
+    console.warn(`[BLOCKED] ${verdict.threatType} dari IP ${verdict.clientIp}`);
   },
 });
 ```
 
 ---
 
-## 🔄 Redis Store (Multi-Instance / Serverless)
+## 🧪 Pengujian & Verifikasi
 
-Untuk aplikasi dengan banyak instance atau serverless, gunakan `RedisStore` agar rate limit tersinkronisasi:
+Proyek ini telah melalui pengujian menyeluruh dengan Vitest mencakup seluruh vektor ancaman:
 
-```ts
-import { nextGuardExpress, RedisStore } from 'nextguard';
-import Redis from 'ioredis';
-
-const redis = new Redis(process.env.REDIS_URL);
-
-app.use(nextGuardExpress({
-  rateLimit: {
-    max: 100,
-    windowMs: 60 * 1000,
-    store: new RedisStore({
-      client: redis,
-      prefix: 'myapp:waf:', // Optional prefix untuk Redis keys
-    }),
-  },
-}));
+```bash
+npm test
 ```
 
-**Redis clients yang didukung:** `ioredis`, `node-redis`, `@upstash/redis`, Dragonfly, KeyDB, Valkey.
+```
+ Test Files  19 passed (19)
+      Tests  127 passed (127)
+   Start at  06:50:09
+   Duration  4.14s
 
----
-
-## 🛠️ Custom Rules
-
-```ts
-customRules: [
-  {
-    name: 'block_suspicious_ips',
-    evaluate: (req) => {
-      const blockedRanges = ['45.142.212.'];
-      return blockedRanges.some(prefix => req.ip.startsWith(prefix));
-    },
-    action: 'block',
-    statusCode: 403,
-    reason: 'IP dari range yang tidak diizinkan',
-  },
-
-  // Async rule — cek reputasi IP ke external service
-  {
-    name: 'threat_intel_check',
-    evaluate: async (req) => {
-      // const reputation = await checkIPReputation(req.ip);
-      // return reputation.score < 50;
-      return false; // placeholder
-    },
-    action: 'block',
-  },
-]
+ ✓ tests/seven-layer-shield.test.ts (12 tests)
+ ✓ tests/node-package.test.ts (10 tests)
+ ✓ tests/next-package.test.ts (11 tests)
+ ✓ tests/telemetry.test.ts (8 tests)
+ ✓ tests/sqli.test.ts (7 tests)
+ ✓ tests/nosqli.test.ts (3 tests)
+ ✓ tests/prototype-pollution.test.ts (4 tests)
+ ✓ tests/ssrf.test.ts (4 tests)
+ ✓ tests/command-injection.test.ts (4 tests)
+ ✓ tests/xss.test.ts (6 tests)
+ ✓ tests/honeypot.test.ts (3 tests)
+ ✓ tests/reputation.test.ts (4 tests)
+ ✓ tests/rate-limit.test.ts (4 tests)
+ ✓ tests/bot.test.ts (4 tests)
+ ✓ tests/ip-filter.test.ts (5 tests)
+ ✓ tests/registry.test.ts (18 tests)
+ ✓ tests/presets.test.ts (13 tests)
+ ✓ tests/nextjs-middleware.test.ts (5 tests)
+ ✓ tests/express.test.ts (2 tests)
 ```
 
 ---
 
-## 📋 Response Format
+## 📄 Lisensi
 
-### JSON Response (API Request)
-```json
-{
-  "success": false,
-  "error": "Access Denied by NextGuard Firewall",
-  "code": "FIREWALL_BLOCKED",
-  "threat": "sql_injection",
-  "reason": "SQL Injection detected in parameter: query.search",
-  "clientIp": "192.168.1.100",
-  "requestId": "ng_abc123_xyz456",
-  "timestamp": "2026-10-03T12:34:56.000Z"
-}
-```
-
-### HTML Response (Browser Request)
-Saat `htmlResponse: true`, browser akan mendapatkan halaman blokir yang elegan (mirip Cloudflare) dengan detail ancaman dan Request ID.
-
----
-
-## 🔐 Ancaman yang Dilindungi
-
-| Ancaman | Method Deteksi |
-|---|---|
-| SQL Injection | Tautology, UNION, stacked queries, time-based blind, schema extraction |
-| XSS | Script tags, event handlers, javascript: URI, HTML entities encoding bypass |
-| OS Command Injection | Shell chaining (`;`, `&&`, `\|`), substitution (`$(...)`), reverse shells |
-| Path Traversal / LFI | `../`, null-byte, URL encoding bypass, PHP wrappers (php://, data://) |
-| DDoS / DoS | Sliding window rate limit, auto IP jailing (Fail2ban style) |
-| Malicious Bots | sqlmap, nikto, acunetix, dirbuster, gobuster, nuclei, wfuzz, dan lainnya |
-| Oversized Payload | Content-Length limit enforcement |
-| IP Blacklist | Exact match dan CIDR subnet matching |
-
----
-
-## 📁 Struktur Package
-
-```
-nextguard/
-├── src/
-│   ├── core/
-│   │   ├── detectors/
-│   │   │   ├── sqli.ts          # SQL Injection detector
-│   │   │   ├── xss.ts           # XSS detector
-│   │   │   ├── command-injection.ts
-│   │   │   ├── path-traversal.ts
-│   │   │   └── bot.ts           # Bot & Scanner detector
-│   │   ├── stores/
-│   │   │   ├── memory-store.ts  # In-memory store (default)
-│   │   │   └── redis-store.ts   # Redis distributed store
-│   │   ├── engine.ts            # Core WAF engine
-│   │   ├── rate-limiter.ts      # Rate limiting & DoS mitigation
-│   │   └── ip-filter.ts         # IP & CIDR filter
-│   ├── middleware/
-│   │   ├── nextjs.ts            # Next.js adapters
-│   │   └── express.ts           # Express/Node.js adapter
-│   ├── security/
-│   │   └── headers.ts           # Security headers
-│   ├── templates/
-│   │   └── blocked-page.ts      # HTML block page & JSON response
-│   ├── types.ts                 # TypeScript type definitions
-│   └── index.ts                 # Main entrypoint & exports
-├── tests/                       # 37 unit & integration tests
-├── examples/
-│   ├── nextjs-example/          # Contoh Next.js (middleware, App Router, Pages Router)
-│   ├── express-example/         # Contoh Express.js
-│   └── redis-store-example.ts   # Contoh Redis Store
-└── dist/                        # Build output (CJS + ESM + TypeScript declarations)
-```
-
----
-
-## 📝 License
-
-MIT © NextGuard Team
+Didistribusikan di bawah Lisensi **MIT**. Bebas digunakan untuk keperluan komersial maupun pribadi.
+Dibuat dengan ❤️ oleh tim pengembang **NextGuard**.

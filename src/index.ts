@@ -151,5 +151,9 @@ export type { SecurityDefinition, GuardGroup, Platform } from './define.js';
 export { ENDPOINT_PRESETS } from './presets.js';
 export type { EndpointPresetKey } from './presets.js';
 
+// Database Guard (per-route database protection)
+export { DatabaseGuard, createDatabaseGuard } from './core/database-guard.js';
+export type { DatabaseGuardConfig, DatabaseGuardResult } from './core/database-guard.js';
+
 // All Types
 export * from './types.js';

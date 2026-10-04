@@ -281,3 +281,7 @@ export type { NextGuardConfig, NextGuardOptions, InspectionVerdict } from '../..
 export { EndpointRegistry, normalizePath } from '../../../src/registry.js';
 export { ThreatForensicsCollector, parseDeviceFingerprint, extractGeoFromHeaders } from '../../../src/core/telemetry.js';
 export type { ThreatForensicRecord, GeoLocation, ClientDeviceFingerprint } from '../../../src/core/telemetry.js';
+
+// ── Database Guard: pasang di file route yang berinteraksi dengan database ────
+export { DatabaseGuard, createDatabaseGuard } from '../../../src/core/database-guard.js';
+export type { DatabaseGuardConfig, DatabaseGuardResult } from '../../../src/core/database-guard.js';

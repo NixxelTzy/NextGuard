@@ -1,5 +1,5 @@
 {
-  "name": "@nextguard/node",
+  "name": "@nixxeltzy/nextguard-node",
   "version": "1.0.0",
   "description": "NextGuard single-install middleware for Node.js and Express — automatic endpoint discovery, zero-config WAF protection",
   "author": "NextGuard Team",
@@ -32,7 +32,7 @@
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "nextguard": ">=1.0.0"
+    "@nixxeltzy/nextguard": ">=1.0.0"
   },
   "keywords": [
     "nextguard",

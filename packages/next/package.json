@@ -1,5 +1,5 @@
 {
-  "name": "@nextguard/next",
+  "name": "@nixxeltzy/nextguard-next",
   "version": "1.0.0",
   "description": "NextGuard single-install middleware for Next.js — automatic endpoint discovery via middleware.ts, App Router & Edge Runtime compatible",
   "author": "NextGuard Team",
@@ -32,7 +32,7 @@
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "nextguard": ">=1.0.0",
+    "@nixxeltzy/nextguard": ">=1.0.0",
     "next": ">=13.0.0"
   },
   "keywords": [

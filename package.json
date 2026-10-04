@@ -1,5 +1,5 @@
 {
-  "name": "nextguard",
+  "name": "@nixxeltzy/nextguard",
   "version": "1.0.0",
   "description": "Production-ready Web Application Firewall (WAF) for Next.js and Node.js. Protects against DDoS, DoS, SQL Injection, XSS, Path Traversal, Command Injection, NoSQL Injection, SSRF, Prototype Pollution, and Malicious Bots.",
   "author": "NextGuard Team",

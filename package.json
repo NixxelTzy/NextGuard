@@ -1,9 +1,20 @@
 {
   "name": "nextguard",
   "version": "1.0.0",
-  "description": "Production-ready Web Application Firewall (WAF) for Next.js and Node.js. Protects against DDoS, DoS, SQL Injection, XSS, Path Traversal, Command Injection, and Malicious Bots.",
+  "description": "Production-ready Web Application Firewall (WAF) for Next.js and Node.js. Protects against DDoS, DoS, SQL Injection, XSS, Path Traversal, Command Injection, NoSQL Injection, SSRF, Prototype Pollution, and Malicious Bots.",
   "author": "NextGuard Team",
   "license": "MIT",
+  "homepage": "https://github.com/NixxelTzy/NextGuard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NixxelTzy/NextGuard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NixxelTzy/NextGuard/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -26,12 +37,14 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "vitest run",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run lint && npm run test && npm run build"
   },
   "keywords": [
     "nextjs",
@@ -44,9 +57,16 @@
     "rate-limit",
     "sql-injection",
     "xss",
+    "nosql-injection",
+    "ssrf",
+    "prototype-pollution",
+    "honeypot",
+    "7-layer-defense",
     "anti-ddos",
     "express",
-    "middleware"
+    "middleware",
+    "telegram-alerts",
+    "threat-intelligence"
   ],
   "devDependencies": {
     "@types/node": "^26.6.4",
@@ -55,3 +75,4 @@
     "vitest": "^5.0.3"
   }
 }
+

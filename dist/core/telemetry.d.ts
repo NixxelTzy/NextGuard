@@ -50,6 +50,19 @@ export interface TelemetryConfig {
     maxHistory?: number;
     /** Webhook URL for alerting (Slack, Discord, or Custom SIEM API) */
     webhookUrl?: string;
+    /**
+     * Telegram Bot alert configuration.
+     * Get your bot token from @BotFather and chat_id from @userinfobot.
+     * @example { botToken: "123456:ABC...", chatId: "-100123456789" }
+     */
+    telegram?: {
+        botToken: string;
+        chatId: string;
+        /** Only alert for these severity levels (default: all) */
+        minSeverity?: 'low' | 'medium' | 'high' | 'critical';
+        /** Custom message template (optional). Receives the ThreatForensicRecord */
+        messageTemplate?: (record: ThreatForensicRecord) => string;
+    };
     /** Custom geolocation resolver function (e.g. MaxMind or ip-api integration) */
     geoResolver?: (ip: string, headers: Record<string, string>) => Promise<GeoLocation> | GeoLocation;
 }
@@ -66,6 +79,7 @@ export declare class ThreatForensicsCollector {
     private enabled;
     private maxHistory;
     private webhookUrl?;
+    private telegram?;
     private geoResolver?;
     private history;
     constructor(config?: TelemetryConfig | boolean);
@@ -74,6 +88,11 @@ export declare class ThreatForensicsCollector {
      */
     capture(verdict: InspectionVerdict, req: RequestContext): Promise<ThreatForensicRecord>;
     private sendWebhookAlert;
+    /**
+     * Sends a Telegram Bot alert via the Telegram Bot API.
+     * Uses MarkdownV2 format with threat details, severity badge, and geo info.
+     */
+    private sendTelegramAlert;
     getHistory(limit?: number): ThreatForensicRecord[];
     clearHistory(): void;
 }

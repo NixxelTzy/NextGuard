@@ -55,6 +55,19 @@ export interface TelemetryConfig {
   maxHistory?: number;
   /** Webhook URL for alerting (Slack, Discord, or Custom SIEM API) */
   webhookUrl?: string;
+  /**
+   * Telegram Bot alert configuration.
+   * Get your bot token from @BotFather and chat_id from @userinfobot.
+   * @example { botToken: "123456:ABC...", chatId: "-100123456789" }
+   */
+  telegram?: {
+    botToken: string;
+    chatId: string;
+    /** Only alert for these severity levels (default: all) */
+    minSeverity?: 'low' | 'medium' | 'high' | 'critical';
+    /** Custom message template (optional). Receives the ThreatForensicRecord */
+    messageTemplate?: (record: ThreatForensicRecord) => string;
+  };
   /** Custom geolocation resolver function (e.g. MaxMind or ip-api integration) */
   geoResolver?: (ip: string, headers: Record<string, string>) => Promise<GeoLocation> | GeoLocation;
 }
@@ -190,6 +203,7 @@ export class ThreatForensicsCollector {
   private enabled: boolean;
   private maxHistory: number;
   private webhookUrl?: string;
+  private telegram?: TelemetryConfig['telegram'];
   private geoResolver?: TelemetryConfig['geoResolver'];
   private history: ThreatForensicRecord[] = [];
 
@@ -201,6 +215,7 @@ export class ThreatForensicsCollector {
       this.enabled = config?.enabled ?? true;
       this.maxHistory = config?.maxHistory ?? 500;
       this.webhookUrl = config?.webhookUrl;
+      this.telegram = config?.telegram;
       this.geoResolver = config?.geoResolver;
     }
   }
@@ -281,10 +296,11 @@ export class ThreatForensicsCollector {
         this.history.pop();
       }
 
-      // Optional webhook alert notification (fire-and-forget)
-      if (this.webhookUrl) {
-        this.sendWebhookAlert(record).catch(() => {});
-      }
+      // Fire all alert channels concurrently (fire-and-forget)
+      const alerts: Promise<void>[] = [];
+      if (this.webhookUrl) alerts.push(this.sendWebhookAlert(record).catch(() => {}));
+      if (this.telegram) alerts.push(this.sendTelegramAlert(record).catch(() => {}));
+      if (alerts.length > 0) Promise.allSettled(alerts);
     }
 
     return record;
@@ -339,6 +355,71 @@ export class ThreatForensicsCollector {
       });
     } catch (err) {
       console.error('[NextGuard:Forensics] Failed to send webhook alert:', err);
+    }
+  }
+
+  /**
+   * Sends a Telegram Bot alert via the Telegram Bot API.
+   * Uses MarkdownV2 format with threat details, severity badge, and geo info.
+   */
+  private async sendTelegramAlert(record: ThreatForensicRecord): Promise<void> {
+    if (!this.telegram) return;
+
+    const { botToken, chatId, minSeverity, messageTemplate } = this.telegram;
+
+    // Severity filter
+    const severityOrder: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+    if (minSeverity && severityOrder[record.threat.severity] < severityOrder[minSeverity]) {
+      return; // Skip below minimum severity
+    }
+
+    try {
+      let text: string;
+
+      if (messageTemplate) {
+        text = messageTemplate(record);
+      } else {
+        // Default formatted Telegram message (HTML mode — safer than MarkdownV2 for dynamic content)
+        const severityEmoji: Record<string, string> = {
+          low: '🟡',
+          medium: '🟠',
+          high: '🔴',
+          critical: '💀',
+        };
+        const emoji = severityEmoji[record.threat.severity] ?? '🛡️';
+        const geoInfo = record.geo.countryCode
+          ? `${record.geo.city ? record.geo.city + ', ' : ''}${record.geo.countryCode}${record.geo.coordinates ? ` (${record.geo.coordinates.latitude.toFixed(4)}, ${record.geo.coordinates.longitude.toFixed(4)})` : ''}`
+          : 'Unknown location';
+
+        text = [
+          `${emoji} <b>NextGuard — Threat Blocked</b>`,
+          ``,
+          `<b>Type:</b> <code>${record.threat.type.toUpperCase()}</code>`,
+          `<b>Severity:</b> ${record.threat.severity.toUpperCase()}`,
+          `<b>Attacker IP:</b> <code>${record.clientIp}</code>`,
+          `<b>Location:</b> ${geoInfo}`,
+          `<b>Device:</b> ${record.client.deviceType} • ${record.client.os}`,
+          `<b>Tool/Browser:</b> ${record.client.browser}`,
+          `<b>Target:</b> <code>${record.request.method} ${record.request.path}</code>`,
+          `<b>Reason:</b> ${record.threat.reason}`,
+          `<b>Time:</b> ${new Date(record.timestamp).toISOString()}`,
+          `<b>Event ID:</b> <code>${record.eventId}</code>`,
+        ].join('\n');
+      }
+
+      const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      await fetch(telegramApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        }),
+      });
+    } catch (err) {
+      console.error('[NextGuard:Forensics] Failed to send Telegram alert:', err);
     }
   }
 

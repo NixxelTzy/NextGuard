@@ -194,4 +194,151 @@ describe('Threat Forensics & Device Fingerprinting', () => {
       expect(threatLogs[0].geo.city).toBe('Tokyo');
     });
   });
+
+  describe('Telegram Alert Integration', () => {
+    it('skips Telegram alert when severity is below minSeverity threshold', async () => {
+      const fetchCalls: string[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (url: string | URL | Request) => {
+        fetchCalls.push(String(url));
+        return new Response('{}', { status: 200 });
+      };
+
+      const collector = new ThreatForensicsCollector({
+        enabled: true,
+        telegram: {
+          botToken: 'test-token',
+          chatId: '-100123456',
+          minSeverity: 'critical', // Only fire for critical
+        },
+      });
+
+      // Simulate a 'medium' severity threat — should NOT trigger Telegram
+      const mockVerdict = {
+        allowed: false,
+        threatType: 'xss' as const,
+        reason: 'XSS detected',
+        statusCode: 403,
+        clientIp: '1.2.3.4',
+        requestId: 'test-req-1',
+        timestamp: Date.now(),
+        mode: 'enforce' as const,
+      };
+
+      await collector.capture(mockVerdict, {
+        url: '/api/test?q=<script>',
+        method: 'GET',
+        ip: '1.2.3.4',
+        headers: { 'user-agent': 'Mozilla/5.0' },
+      });
+
+      // Wait for fire-and-forget
+      await new Promise(r => setTimeout(r, 50));
+
+      const telegramCalls = fetchCalls.filter(u => u.includes('api.telegram.org'));
+      expect(telegramCalls.length).toBe(0); // Should be skipped
+
+      globalThis.fetch = originalFetch;
+    });
+
+    it('sends Telegram alert for critical severity threats', async () => {
+      const fetchCalls: Array<{ url: string; body: unknown }> = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+        fetchCalls.push({ url: String(url), body: JSON.parse((init?.body as string) || '{}') });
+        return new Response('{"ok":true}', { status: 200 });
+      };
+
+      const collector = new ThreatForensicsCollector({
+        enabled: true,
+        telegram: {
+          botToken: 'bot123:ABC',
+          chatId: '-100987654321',
+          minSeverity: 'high',
+        },
+      });
+
+      const mockVerdict = {
+        allowed: false,
+        threatType: 'command_injection' as const, // critical severity
+        reason: 'Command injection detected',
+        statusCode: 403,
+        clientIp: '10.0.0.1',
+        requestId: 'test-req-2',
+        timestamp: Date.now(),
+        mode: 'enforce' as const,
+      };
+
+      await collector.capture(mockVerdict, {
+        url: '/api/exec?cmd=ls+-la',
+        method: 'POST',
+        ip: '10.0.0.1',
+        headers: {
+          'user-agent': 'curl/7.88.1',
+          'x-vercel-ip-country': 'RU',
+          'x-vercel-ip-city': 'Moscow',
+        },
+      });
+
+      await new Promise(r => setTimeout(r, 50));
+
+      const telegramCalls = fetchCalls.filter(c => c.url.includes('api.telegram.org'));
+      expect(telegramCalls.length).toBe(1);
+      expect(telegramCalls[0].url).toContain('bot123:ABC/sendMessage');
+      expect(telegramCalls[0].body).toMatchObject({
+        chat_id: '-100987654321',
+        parse_mode: 'HTML',
+      });
+      const msgText = (telegramCalls[0].body as { text: string }).text;
+      expect(msgText).toContain('COMMAND_INJECTION');
+      expect(msgText).toContain('10.0.0.1');
+
+      globalThis.fetch = originalFetch;
+    });
+
+    it('uses custom messageTemplate when provided', async () => {
+      const fetchCalls: Array<{ url: string; body: unknown }> = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+        fetchCalls.push({ url: String(url), body: JSON.parse((init?.body as string) || '{}') });
+        return new Response('{"ok":true}', { status: 200 });
+      };
+
+      const collector = new ThreatForensicsCollector({
+        enabled: true,
+        telegram: {
+          botToken: 'mybot:TOKEN',
+          chatId: '123456789',
+          messageTemplate: (record) => `CUSTOM ALERT: ${record.clientIp} attacked ${record.request.path}`,
+        },
+      });
+
+      const mockVerdict = {
+        allowed: false,
+        threatType: 'sql_injection' as const,
+        reason: 'SQL injection in query',
+        statusCode: 403,
+        clientIp: '5.5.5.5',
+        requestId: 'test-req-3',
+        timestamp: Date.now(),
+        mode: 'enforce' as const,
+      };
+
+      await collector.capture(mockVerdict, {
+        url: '/api/data?id=1 OR 1=1',
+        method: 'GET',
+        ip: '5.5.5.5',
+        headers: { 'user-agent': 'python-requests/2.31' },
+      });
+
+      await new Promise(r => setTimeout(r, 50));
+
+      const telegramCalls = fetchCalls.filter(c => c.url.includes('api.telegram.org'));
+      expect(telegramCalls.length).toBe(1);
+      const msgText = (telegramCalls[0].body as { text: string }).text;
+      expect(msgText).toBe('CUSTOM ALERT: 5.5.5.5 attacked /api/data');
+
+      globalThis.fetch = originalFetch;
+    });
+  });
 });

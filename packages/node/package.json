@@ -1,9 +1,21 @@
 {
   "name": "@nextguard/node",
   "version": "1.0.0",
-  "description": "NextGuard single-install middleware for Node.js and Express — automatic endpoint discovery",
+  "description": "NextGuard single-install middleware for Node.js and Express — automatic endpoint discovery, zero-config WAF protection",
   "author": "NextGuard Team",
   "license": "MIT",
+  "homepage": "https://github.com/NixxelTzy/NextGuard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NixxelTzy/NextGuard.git",
+    "directory": "packages/node"
+  },
+  "bugs": {
+    "url": "https://github.com/NixxelTzy/NextGuard/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -16,10 +28,26 @@
   },
   "files": ["dist", "README.md"],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --sourcemap --clean"
+    "build": "tsup src/index.ts --format cjs,esm --dts --sourcemap --clean",
+    "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
     "nextguard": ">=1.0.0"
   },
-  "keywords": ["nextguard", "express", "nodejs", "firewall", "middleware", "security", "waf"]
+  "keywords": [
+    "nextguard",
+    "express",
+    "nodejs",
+    "firewall",
+    "middleware",
+    "security",
+    "waf",
+    "ddos-protection",
+    "rate-limiting",
+    "sql-injection",
+    "xss",
+    "telegram-alerts",
+    "threat-intelligence",
+    "auto-endpoint-discovery"
+  ]
 }

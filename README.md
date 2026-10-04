@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/NixxelTzy/NextGuard"><img src="https://img.shields.io/badge/NextGuard-v1.0.0-blue.svg" alt="Version"></a>
-  <a href="https://github.com/NixxelTzy/NextGuard/actions"><img src="https://img.shields.io/badge/tests-127%20passed-brightgreen.svg" alt="Tests"></a>
+  <a href="https://github.com/NixxelTzy/NextGuard/actions"><img src="https://img.shields.io/badge/tests-148%20passed-brightgreen.svg" alt="Tests"></a>
   <a href="https://github.com/NixxelTzy/NextGuard/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18.0.0-orange.svg" alt="Node Version"></a>
 </p>
@@ -24,10 +24,11 @@
   - [1. Node.js / Express (`@nextguard/node`)](#1-nodejs--express-nextguardnode)
   - [2. Next.js (`@nextguard/next`)](#2-nextjs-nextguardnext)
 - [🎯 Contoh Proteksi Endpoint Nyata](#-contoh-proteksi-endpoint-nyata)
+- [🗄️ Database Guard — Proteksi Database Per-Route](#️-database-guard--proteksi-database-per-route)
 - [🔍 Automatic Endpoint Discovery & Telemetri](#-automatic-endpoint-discovery--telemetri)
 - [📍 Pelacakan Geolocation, Koordinat & Perangkat Penyerang](#-pelacakan-geolocation-koordinat--perangkat-penyerang)
 - [🍯 Active Deception (Honeypot Trap) & Reputasi IP (Fail2Ban)](#-active-deception-honeypot-trap--reputasi-ip-fail2ban)
-- [🔔 Integrasi Webhook (Discord / Slack)](#-integrasi-webhook-discord--slack)
+- [🔔 Webhook Alert — Discord, Slack & Telegram](#-webhook-alert--discord-slack--telegram)
 - [⚙️ Referensi Konfigurasi Lengkap](#️-referensi-konfigurasi-lengkap)
 - [🧪 Pengujian & Verifikasi](#-pengujian--verifikasi)
 
@@ -270,6 +271,127 @@ guard.protect('/api/login', {
 
 ---
 
+## 🗄️ Database Guard — Proteksi Database Per-Route
+
+**DatabaseGuard** adalah lapisan perlindungan tambahan yang dipasang langsung di file route yang berinteraksi dengan database. Fungsinya melindungi database dari:
+
+- 🚦 **Write/Read Rate Limiting** — Batasi jumlah operasi tulis/baca per IP per menit
+- 📦 **Payload Size Protection** — Cegah data raksasa yang bisa memenuhi storage database
+- 🌊 **Bulk Insert Detection** — Blokir upaya memasukkan ribuan data sekaligus
+- 🔁 **Duplicate Write Prevention** — Deteksi dan blokir pengiriman data identik berulang (spam)
+- 🧬 **Field Flooding Detection** — Cegah schema flooding dengan terlalu banyak field unik
+- 🪆 **Nesting Depth Limit** — Blokir deeply nested payload attack
+- 🕵️ **Bulk Extraction Prevention** — Deteksi data scraping melalui GET request berlebihan
+
+> **Catatan:** DatabaseGuard bekerja **berdampingan** dengan global middleware NextGuard — bukan menggantikannya. Request sudah difilter oleh 7-Layer Shield global, lalu DatabaseGuard menambahkan proteksi khusus di level database.
+
+### Setup Next.js (App Router)
+
+```ts
+// app/api/users/route.ts
+import { createDatabaseGuard } from '@nixxeltzy/nextguard-next';
+
+const dbGuard = createDatabaseGuard({
+  maxWritesPerMinute: 10,       // Maks 10 operasi tulis per IP/menit
+  maxReadsPerMinute: 50,        // Maks 50 operasi baca per IP/menit
+  maxPayloadSizeBytes: 51_200,  // Maks 50KB per request (cegah storage penuh)
+  maxFieldCount: 30,            // Maks 30 field top-level
+  maxArrayLength: 100,          // Maks 100 item per array (cegah bulk insert)
+  maxNestingDepth: 5,           // Maks kedalaman nesting JSON
+  preventDuplicateWrites: true, // Blokir payload identik dalam 5 detik
+  preventBulkExtraction: true,  // Blokir data scraping via GET berlebihan
+});
+
+export async function POST(req: Request) {
+  // Cek database guard — return otomatis 429/413/400 jika terblokir
+  const blocked = await dbGuard.protectNext(req);
+  if (blocked) return blocked;
+
+  // ✅ Aman — lanjut ke operasi database
+  const data = await req.json();
+  // await db.users.create(data);
+  return Response.json({ ok: true });
+}
+
+export async function GET(req: Request) {
+  const blocked = await dbGuard.protectNext(req);
+  if (blocked) return blocked;
+
+  // ✅ Aman — lanjut ke query database
+  // const users = await db.users.findMany();
+  return Response.json({ users: [] });
+}
+```
+
+### Setup Node.js / Express
+
+```ts
+// routes/users.ts
+import { createDatabaseGuard } from '@nixxeltzy/nextguard-node';
+
+const dbGuard = createDatabaseGuard({
+  maxWritesPerMinute: 10,
+  maxPayloadSizeBytes: 51_200,
+  preventDuplicateWrites: true,
+});
+
+// Gunakan sebagai middleware per-route
+router.post('/api/users', dbGuard.middleware(), async (req, res) => {
+  // ✅ Aman — request sudah divalidasi
+  await db.users.create(req.body);
+  res.json({ ok: true });
+});
+
+router.get('/api/users', dbGuard.middleware(), async (req, res) => {
+  const users = await db.users.findMany();
+  res.json({ users });
+});
+```
+
+### Contoh Response Saat Terblokir
+
+```json
+// 429 Too Many Requests — write rate limit exceeded
+{
+  "error": "Database Protection",
+  "message": "Database write rate limit exceeded: max 10 writes/min per IP",
+  "statusCode": 429,
+  "retryAfter": 43
+}
+
+// 413 Payload Too Large — storage protection
+{
+  "error": "Database Protection",
+  "message": "Payload too large: 85432 bytes exceeds database guard limit of 51200 bytes. This could fill database storage.",
+  "statusCode": 413
+}
+
+// 400 Bad Request — bulk insert blocked
+{
+  "error": "Database Protection",
+  "message": "Bulk insert detected: array contains 5000 items, max allowed is 100. Use paginated writes instead.",
+  "statusCode": 400
+}
+```
+
+### Referensi Konfigurasi DatabaseGuard
+
+| Opsi | Default | Keterangan |
+|---|---|---|
+| `maxWritesPerMinute` | `20` | Maks operasi POST/PUT/PATCH/DELETE per IP/menit |
+| `maxReadsPerMinute` | `100` | Maks operasi GET per IP/menit |
+| `maxPayloadSizeBytes` | `102400` (100KB) | Maks ukuran body request |
+| `maxFieldCount` | `50` | Maks field top-level di body |
+| `maxArrayLength` | `500` | Maks item dalam array manapun di payload |
+| `maxNestingDepth` | `8` | Maks kedalaman nesting JSON |
+| `preventDuplicateWrites` | `true` | Blokir payload identik dari IP sama |
+| `duplicateWindowMs` | `5000` | Window waktu deteksi duplikat (ms) |
+| `preventBulkExtraction` | `true` | Aktifkan read rate limiting |
+| `statusCode` | `429` | HTTP status code saat diblokir |
+| `message` | — | Custom pesan error |
+
+---
+
 ## 🔍 Automatic Endpoint Discovery & Telemetri
 
 NextGuard otomatis mendeteksi endpoint dari **request aktual** yang masuk. Anda tidak perlu mendaftarkan endpoint secara manual.
@@ -376,21 +498,91 @@ Setiap ancaman menambahkan poin *strike*:
 
 ---
 
-## 🔔 Integrasi Webhook (Discord / Slack)
+## 🔔 Webhook Alert — Discord, Slack & Telegram
 
-Dapatkan notifikasi instan saat serangan berbahaya terjadi di server Anda:
+Dapatkan notifikasi instan ke berbagai platform saat serangan berbahaya terdeteksi:
+
+### Discord & Slack
 
 ```ts
 const guard = NextGuard({
   telemetry: {
     enabled: true,
-    // Cukup masukkan URL Webhook Discord atau Slack
     webhookUrl: 'https://discord.com/api/webhooks/123456789/abcdefgh',
+    // atau Slack:
+    // webhookUrl: 'https://hooks.slack.com/services/xxx/yyy/zzz',
   },
 });
 ```
 
-NextGuard otomatis mengirimkan embed kaya dengan rincian **IP Penyerang, Lokasi, Koordinat, Perangkat, Jenis Exploit, dan Target Endpoint**.
+### Telegram Bot Alert
+
+Cocok untuk notifikasi real-time di HP langsung ke Telegram:
+
+```ts
+const guard = NextGuard({
+  telemetry: {
+    enabled: true,
+    telegram: {
+      botToken: process.env.TELEGRAM_BOT_TOKEN, // dari @BotFather
+      chatId: process.env.TELEGRAM_CHAT_ID,     // dari @userinfobot
+      minSeverity: 'high',  // Hanya kirim alert 'high' & 'critical' (opsional)
+    },
+  },
+});
+```
+
+#### Cara mendapatkan Bot Token & Chat ID:
+1. Buka Telegram → cari **@BotFather** → `/newbot` → copy token
+2. Kirim pesan ke bot kamu, lalu buka **@userinfobot** → copy `id` sebagai `chatId`
+3. Untuk group/channel: tambahkan bot ke group → gunakan ID group (diawali `-`)
+
+#### Contoh pesan Telegram yang dikirim:
+
+```
+💀 NextGuard — Threat Blocked
+
+Type: COMMAND_INJECTION
+Severity: CRITICAL
+Attacker IP: 192.168.1.100
+Location: Jakarta, ID (-6.2088, 106.8456)
+Device: bot_scanner • Linux
+Tool/Browser: sqlmap (Exploit Scanner)
+Target: POST /api/exec
+Reason: Command injection pattern detected
+Time: 2026-10-04T00:05:00.000Z
+Event ID: req_abc123
+```
+
+> 💡 **Tip Vercel:** Header geolocation dari Vercel (`x-vercel-ip-country`, `x-vercel-ip-city`, `x-vercel-ip-latitude`, `x-vercel-ip-longitude`) otomatis dibaca NextGuard — tidak perlu konfigurasi tambahan.
+
+### Custom Message Template
+
+```ts
+telegram: {
+  botToken: process.env.TELEGRAM_BOT_TOKEN,
+  chatId: process.env.TELEGRAM_CHAT_ID,
+  messageTemplate: (record) =>
+    `🚨 ALERT: ${record.clientIp} menyerang ${record.request.path}\n` +
+    `Jenis: ${record.threat.type} | Severity: ${record.threat.severity}`,
+},
+```
+
+### Gunakan Discord & Telegram Bersamaan
+
+```ts
+telemetry: {
+  enabled: true,
+  webhookUrl: 'https://discord.com/api/webhooks/...', // Discord
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN,          // Telegram
+    chatId: process.env.TELEGRAM_CHAT_ID,
+    minSeverity: 'critical', // Telegram hanya untuk critical
+  },
+},
+```
+
+NextGuard mengirim ke semua channel **secara paralel** (fire-and-forget) tanpa menambah latency ke request.
 
 ---
 
@@ -468,15 +660,17 @@ npm test
 ```
 
 ```
- Test Files  19 passed (19)
-      Tests  127 passed (127)
-   Start at  06:50:09
-   Duration  4.14s
+ Test Files  20 passed (20)
+      Tests  148 passed (148)
+   Start at  07:48:11
+   Duration  11.02s
 
+ ✓ tests/database-guard.test.ts (18 tests)
  ✓ tests/seven-layer-shield.test.ts (12 tests)
  ✓ tests/node-package.test.ts (10 tests)
  ✓ tests/next-package.test.ts (11 tests)
- ✓ tests/telemetry.test.ts (8 tests)
+ ✓ tests/telemetry.test.ts (11 tests)
+ ✓ tests/registry.test.ts (18 tests)
  ✓ tests/sqli.test.ts (7 tests)
  ✓ tests/nosqli.test.ts (3 tests)
  ✓ tests/prototype-pollution.test.ts (4 tests)
@@ -488,7 +682,6 @@ npm test
  ✓ tests/rate-limit.test.ts (4 tests)
  ✓ tests/bot.test.ts (4 tests)
  ✓ tests/ip-filter.test.ts (5 tests)
- ✓ tests/registry.test.ts (18 tests)
  ✓ tests/presets.test.ts (13 tests)
  ✓ tests/nextjs-middleware.test.ts (5 tests)
  ✓ tests/express.test.ts (2 tests)

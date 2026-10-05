@@ -42,7 +42,7 @@ const {
   cleanupTelegramCooldown,
 } = require('./security/telegram');
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 const SAFE_HEADERS = new Set([
   'cookie',
@@ -54,14 +54,28 @@ const SAFE_HEADERS = new Set([
   'sec-ch-ua',
   'sec-ch-ua-platform',
   'sec-ch-ua-mobile',
+  'sec-ch-ua-arch',
+  'sec-ch-ua-bitness',
+  'sec-ch-ua-full-version',
+  'sec-ch-ua-full-version-list',
+  'sec-ch-ua-model',
+  'sec-fetch-site',
+  'sec-fetch-mode',
+  'sec-fetch-dest',
+  'sec-fetch-user',
   'referer',
   'origin',
   'host',
   'connection',
+  'keep-alive',
+  'upgrade-insecure-requests',
   'cache-control',
   'pragma',
+  'te',
   'content-type',
   'content-length',
+  'content-encoding',
+  'transfer-encoding',
   'next-action',
   'next-router-prefetch',
   'next-router-state-tree',
@@ -71,11 +85,34 @@ const SAFE_HEADERS = new Set([
   'x-forwarded-for',
   'x-forwarded-proto',
   'x-forwarded-host',
+  'x-forwarded-port',
   'x-real-ip',
+  'x-request-id',
+  'x-correlation-id',
+  'x-vercel-id',
+  'x-vercel-deployment-url',
+  'x-vercel-forwarded-for',
+  'x-vercel-ip-city',
+  'x-vercel-ip-country',
+  'x-vercel-ip-country-region',
+  'x-vercel-ip-latitude',
+  'x-vercel-ip-longitude',
+  'x-vercel-proxied-for',
   'cf-connecting-ip',
+  'cf-connecting-ipv6',
+  'cf-ipcountry',
   'cf-ray',
   'cf-visitor',
+  'cf-cache-status',
+  'cf-request-id',
+  'cf-worker',
+  'cdn-loop',
+  'fly-forwarded-port',
+  'fly-client-ip',
   'traceparent',
+  'tracestate',
+  'baggage',
+  'via',
 ]);
 
 const SAFE_COOKIE_PREFIXES = [
@@ -92,10 +129,13 @@ const SAFE_COOKIE_PREFIXES = [
   'mp_',
   'ajs_',
   'intercom',
+  '__cf_bm',
+  '__cfruid',
+  '_vercel',
+  'vercel',
 ];
 
 const SUSPICIOUS_HEADERS = [
-  'x-forwarded-host',
   'x-original-url',
   'x-rewrite-url',
   'x-override-url',
@@ -139,26 +179,26 @@ const DEFAULT_CONFIG = {
   layer2: {
     enabled: true,
     windowMs: 60000,
-    maxRequests: 240,
-    burstLimit: 60,
+    maxRequests: 360,
+    burstLimit: 80,
     burstWindowMs: 5000,
     penaltyMs: 30000,
   },
 
   layer3: {
     enabled: true,
-    maxPathsPerWindow: 80,
-    maxErrorsPerWindow: 20,
+    maxPathsPerWindow: 250,
+    maxErrorsPerWindow: 30,
     fingerprintCookieName: '__ng_fp',
     jsChallenge: false,
   },
 
   layer4: {
     enabled: true,
-    requireUserAgent: true,
+    requireUserAgent: false,
     blockMaliciousUA: true,
     blockMissingSNI: false,
-    maxHeaderSize: 16384,
+    maxHeaderSize: 32768,
   },
 
   layer5: {
@@ -390,14 +430,25 @@ function layer3_behavior(ip, req, config, log) {
   const rec = ipStore.get(ip);
   if (!rec) return { blocked: false };
 
+  const isPrefetch = (
+    getHeader(req, 'next-router-prefetch') === '1' ||
+    getHeader(req, 'purpose') === 'prefetch' ||
+    getHeader(req, 'sec-purpose') === 'prefetch' ||
+    getHeader(req, 'x-middleware-prefetch') === '1'
+  );
+
   const { path } = extractPathAndUrl(req);
-  rec.paths.add(path);
+
+  if (!isPrefetch) {
+    rec.paths.add(path);
+  }
 
   if (rec.paths.size > cfg.maxPathsPerWindow) {
     rec.violations++;
     log.threat(`Layer3 | Path scanning detected: ${ip} (${rec.paths.size} unique paths)`);
     return { blocked: true, reason: 'Path scanning behavior detected', layer: 3 };
   }
+
 
   if (cfg.jsChallenge) {
     const cookieHeader = getHeader(req, 'cookie') || '';

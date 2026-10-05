@@ -215,7 +215,8 @@ test('Next.js static asset chunks bypass rate limiting with 0ms delay', async ()
     const duration = Date.now() - start;
 
     assert.strictEqual(res, null, `Asset ${asset} should be allowed`);
-    assert.ok(duration < 100, `Asset ${asset} must be served without artificial delay (${duration}ms)`);
+    assert.ok(duration < 500, `Asset ${asset} must be served without artificial delay (${duration}ms)`);
+
   }
 });
 

@@ -42,7 +42,7 @@ const {
   cleanupTelegramCooldown,
 } = require('./security/telegram');
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 
 const SAFE_HEADERS = new Set([
   'cookie',
@@ -114,6 +114,7 @@ const DEFAULT_CONFIG = {
   mode: 'protect',
   trustProxy: true,
   logLevel: 'warn',
+  blockPage: null,
 
   telegram: {
     enabled: false,
@@ -206,9 +207,22 @@ function createLogger(level) {
   };
 }
 
+const INTERNAL_BYPASS_PATHS = new Set([
+  '/blocked',
+  '/403',
+  '/429',
+  '/503',
+  '/error',
+  '/access-denied',
+  '/too-many-requests',
+  '/rate-limited',
+]);
+
 function isStaticAsset(path) {
   if (!path || typeof path !== 'string') return false;
   const p = path.toLowerCase().split('?')[0];
+
+  if (INTERNAL_BYPASS_PATHS.has(p)) return true;
 
   if (
     p.startsWith('/_next/') ||
@@ -717,6 +731,14 @@ async function runGuard(req, res, config, log, events) {
   if (isStaticAsset(path)) {
     if (res) applySecurityHeaders(res);
     return { blocked: false };
+  }
+
+  if (config.blockPage && typeof config.blockPage === 'string') {
+    const bp = config.blockPage.toLowerCase().split('?')[0];
+    if (path.toLowerCase() === bp || path.toLowerCase().startsWith(bp + '/') || path.toLowerCase().startsWith(bp + '?')) {
+      if (res) applySecurityHeaders(res);
+      return { blocked: false };
+    }
   }
 
   if (!ipStore.has(ip)) {

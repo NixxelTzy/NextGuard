@@ -1,9 +1,19 @@
 {
   "name": "@nixxeltzy/nextguard",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "🛡️ NextGuard — 7-Layer DDoS Firewall & Active Defense Shield for Node.js and Next.js",
   "main": "nextguard.js",
   "types": "nextguard.d.ts",
+  "exports": {
+    ".": {
+      "require": "./nextguard.js",
+      "types": "./nextguard.d.ts"
+    },
+    "./middleware": {
+      "require": "./next-middleware.js",
+      "types": "./next-middleware.d.ts"
+    }
+  },
   "scripts": {
     "test": "node test/nextguard.test.js",
     "lint": "eslint nextguard.js"

@@ -42,7 +42,7 @@ const {
   cleanupTelegramCooldown,
 } = require('./security/telegram');
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 
 const SAFE_HEADERS = new Set([
   'cookie',

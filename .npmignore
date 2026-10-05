@@ -1,36 +1,6 @@
-# .npmignore — Files excluded from the published npm package
-
-# Source files (not needed, dist/ is what matters)
-src/
-tests/
-*.test.ts
-*.spec.ts
-
-# Config files
-tsconfig.json
-tsup.config.*
-vitest.config.*
-.eslintrc*
-.prettierrc*
-biome.json
-
-# Development files
+node_modules/
 .env
-.env.*
-!.env.example
-.github/
-.git/
-.gitignore
 *.log
 coverage/
 .nyc_output/
-
-# Editor / OS
-.vscode/
-.idea/
-*.DS_Store
-Thumbs.db
-
-# Scratch / temp
-scratch/
-tmp/
+dist/

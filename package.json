@@ -1,6 +1,6 @@
 {
   "name": "@nixxeltzy/nextguard",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "🛡️ NextGuard — 7-Layer DDoS Firewall & Active Defense Shield for Node.js and Next.js",
   "main": "nextguard.js",
   "types": "nextguard.d.ts",

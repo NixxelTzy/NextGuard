@@ -1,4 +1,4 @@
-// Type definitions for NextGuard v1.0.0
+// Type definitions for NextGuard v1.1.0
 
 import { EventEmitter } from 'events';
 import { IncomingMessage, ServerResponse } from 'http';
@@ -6,6 +6,26 @@ import { IncomingMessage, ServerResponse } from 'http';
 export declare const VERSION: string;
 
 // ─── Configuration Types ────────────────────────────────────────────────────
+
+export interface TelegramConfig {
+  /** Enable Telegram alert notifications (default: false, or auto-true if botToken and chatId are set) */
+  enabled?: boolean;
+  /** Telegram bot token from @BotFather (or read from process.env.TELEGRAM_BOT_TOKEN) */
+  botToken?: string | null;
+  /** Telegram chat ID to receive alerts (or read from process.env.TELEGRAM_CHAT_ID) */
+  chatId?: string | null;
+  /** Debounce cooldown in ms per IP+Layer to prevent alert floods during DDoS (default: 30000) */
+  cooldownMs?: number;
+  /** Minimum firewall layer to trigger a Telegram alert: 1-7 (default: 1) */
+  minLayer?: number;
+}
+
+export interface AdminConfig {
+  /** Enable internal admin endpoints like /stats, /ban, /unban (default: false) */
+  enabled?: boolean;
+  /** Route prefix for admin endpoints if enabled (default: '/__nextguard') */
+  routePrefix?: string;
+}
 
 export interface Layer1Config {
   enabled?: boolean;
@@ -71,21 +91,11 @@ export interface Layer5Config {
 
 export interface Layer6Config {
   enabled?: boolean;
-  /**
-   * If non-empty, ONLY allow requests from these ISO 3166-1 alpha-2 country codes.
-   * e.g. ['US', 'ID', 'SG']
-   */
+  /** If non-empty, ONLY allow requests from these ISO 3166-1 alpha-2 country codes */
   allowedCountries?: string[];
-  /**
-   * Always block these ISO 3166-1 alpha-2 country codes.
-   * e.g. ['CN', 'RU', 'KP']
-   */
+  /** Always block these ISO 3166-1 alpha-2 country codes */
   blockedCountries?: string[];
-  /**
-   * URL template for geo lookup API.
-   * Use {ip} as placeholder. Response must include `countryCode` field.
-   * e.g. 'http://ip-api.com/json/{ip}?fields=countryCode'
-   */
+  /** URL template for geo lookup API, e.g. 'http://ip-api.com/json/{ip}?fields=countryCode' */
   geoApiUrl?: string | null;
 }
 
@@ -103,10 +113,7 @@ export interface Layer7Config {
   slowReadChunkMs?: number;
   /** Enable reset storm — flood attacker with garbage to crash scanner state */
   resetStormEnabled?: boolean;
-  /**
-   * URL paths that act as honeypots — any access triggers tarpit and violation recording.
-   * Defaults include: /.env, /wp-admin, /admin, /phpmyadmin, /.git/HEAD, etc.
-   */
+  /** Honeypot exploit probes — only pure probe paths like /.env, /.git/HEAD */
   honeypotPaths?: string[];
 }
 
@@ -124,6 +131,10 @@ export interface NextGuardConfig {
   trustProxy?: boolean;
   /** Log verbosity: 'silent' | 'warn' | 'info' | 'debug' (default: 'warn') */
   logLevel?: 'silent' | 'warn' | 'info' | 'debug';
+  /** Real-time Telegram security alerts (optimized for Vercel) */
+  telegram?: TelegramConfig;
+  /** Optional admin routes (default: disabled) */
+  admin?: AdminConfig;
   layer1?: Layer1Config;
   layer2?: Layer2Config;
   layer3?: Layer3Config;
@@ -157,133 +168,118 @@ export interface ThreatEvent {
   ip: string;
   layer: number;
   reason: string;
+  path: string;
+  method: string;
+  action: string;
+  timestamp: string;
   req: IncomingMessage | Request;
+}
+
+// ─── Middleware Interface ────────────────────────────────────────────────────
+
+export interface NextGuardMiddleware {
+  /** Express / Node.js HTTP signature */
+  (req: IncomingMessage, res: ServerResponse, next?: (err?: Error) => void): void;
+  /** Next.js App Router / Edge middleware signature */
+  (req: Request): Promise<Response | null>;
+
+  instance: NextGuardInstance;
+  middleware: (req: IncomingMessage, res: ServerResponse, next: (err?: Error) => void) => void;
+  nextMiddleware: (req: Request) => Promise<Response | null>;
+  handler: (next: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void;
+  ban: (ip: string, options?: { durationMs?: number; reason?: string }) => void;
+  unban: (ip: string) => void;
+  getStats: () => Stats;
+  setMode: (mode: 'protect' | 'monitor' | 'lockdown') => void;
+  addToBlacklist: (ip: string) => void;
+  removeFromBlacklist: (ip: string) => void;
+  events: EventEmitter;
+  config: Required<NextGuardConfig>;
+  version: string;
 }
 
 // ─── NextGuard Instance ──────────────────────────────────────────────────────
 
 export interface NextGuardInstance {
-  /**
-   * Express-compatible middleware.
-   * @example
-   * import express from 'express';
-   * import { createNextGuard } from 'nextguard';
-   * const app = express();
-   * const guard = createNextGuard();
-   * app.use(guard.middleware);
-   */
   middleware: (req: IncomingMessage, res: ServerResponse, next: (err?: Error) => void) => void;
-
-  /**
-   * Next.js App Router middleware.
-   * Use this in your `middleware.ts` at the project root.
-   * @example
-   * // middleware.ts
-   * import { createNextGuard } from 'nextguard';
-   * const guard = createNextGuard();
-   * export const middleware = guard.nextMiddleware;
-   * export const config = { matcher: ['/((?!_next/static|favicon.ico).*)'] };
-   */
   nextMiddleware: (req: Request) => Promise<Response | null>;
-
-  /**
-   * Wrap a raw Node.js HTTP handler.
-   * @example
-   * import http from 'http';
-   * import { createNextGuard } from 'nextguard';
-   * const guard = createNextGuard();
-   * const server = http.createServer(guard.handler(myHandler));
-   */
+  universalMiddleware: NextGuardMiddleware;
   handler: (next: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void;
-
-  /** Manually ban an IP address */
   ban: (ip: string, options?: { durationMs?: number; reason?: string }) => void;
-
-  /** Remove a ban from an IP address */
   unban: (ip: string) => void;
-
-  /** Get current shield statistics */
   getStats: () => Stats;
-
-  /** Switch operating mode at runtime */
   setMode: (mode: 'protect' | 'monitor' | 'lockdown') => void;
-
-  /** Add an IP or CIDR to the runtime blacklist */
   addToBlacklist: (ip: string) => void;
-
-  /** Remove an IP or CIDR from the runtime blacklist */
   removeFromBlacklist: (ip: string) => void;
-
-  /** EventEmitter for threat events */
+  sendTelegramAlert: (threatInfo: Partial<ThreatEvent>) => Promise<boolean>;
   events: EventEmitter;
-
-  /** Resolved configuration */
   config: Required<NextGuardConfig>;
-
-  /** Package version */
   version: string;
 }
 
-// ─── Factory ─────────────────────────────────────────────────────────────────
+// ─── Callable Entry Point ────────────────────────────────────────────────────
 
-/**
- * Create a NextGuard firewall instance with custom configuration.
- *
- * @example
- * import { createNextGuard } from 'nextguard';
- *
- * const guard = createNextGuard({
- *   logLevel: 'info',
- *   layer2: { maxRequests: 60, windowMs: 60_000 },
- *   layer6: { enabled: true, blockedCountries: ['CN', 'RU'] },
- *   layer7: { tarpitEnabled: true, tarpitDelayMs: 30_000 },
- * });
- *
- * guard.events.on('threat', ({ ip, layer, reason }) => {
- *   console.log(`Threat from ${ip} at layer ${layer}: ${reason}`);
- * });
- */
+export interface NextGuardCallable {
+  /**
+   * Usage 1: Create zero-config middleware for Next.js or Express:
+   * @example
+   * import { nextguard } from "nextguard";
+   * export const middleware = nextguard();
+   * export const config = { matcher: ["/:path*"] };
+   */
+  (): NextGuardMiddleware;
+
+  /**
+   * Usage 2: Create configured middleware:
+   * @example
+   * import { nextguard } from "nextguard";
+   * export const middleware = nextguard({
+   *   layer2: { maxRequests: 60 },
+   *   telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID }
+   * });
+   */
+  (config: NextGuardConfig): NextGuardMiddleware;
+
+  /**
+   * Usage 3: Direct functional Next.js middleware:
+   * @example
+   * import { nextguard } from "nextguard";
+   * export function middleware(request) {
+   *   return nextguard(request);
+   * }
+   */
+  (request: Request): Promise<Response | null>;
+}
+
+// ─── Exports ─────────────────────────────────────────────────────────────────
+
 export declare function createNextGuard(config?: NextGuardConfig): NextGuardInstance;
 
-// ─── Utility Exports ─────────────────────────────────────────────────────────
-
-/** Extract the real client IP from a request (respects X-Forwarded-For, CF-Connecting-IP, etc.) */
 export declare function getClientIP(req: IncomingMessage | Request, trustProxy?: boolean): string;
-
-/** Inspect a single string value for known attack signatures */
 export declare function inspectValue(value: string): { matched: boolean; pattern: string | null };
-
-/** Deep-inspect an object (query params, body) for attack patterns */
 export declare function deepInspect(obj: unknown, path?: string): { matched: boolean; pattern: string | null; path: string | null };
-
-/** Check if an IP address falls within a CIDR range */
 export declare function ipInCIDR(ip: string, cidr: string): boolean;
+export declare function sendTelegramAlert(threatInfo: Partial<ThreatEvent>, config?: NextGuardConfig): Promise<boolean>;
 
-// ─── Default Instance Exports ────────────────────────────────────────────────
+export declare const nextguard: NextGuardCallable & {
+  nextguard: NextGuardCallable;
+  createNextGuard: typeof createNextGuard;
+  middleware: NextGuardMiddleware;
+  nextMiddleware: (req: Request) => Promise<Response | null>;
+  handler: NextGuardInstance['handler'];
+  ban: NextGuardInstance['ban'];
+  unban: NextGuardInstance['unban'];
+  getStats: NextGuardInstance['getStats'];
+  setMode: NextGuardInstance['setMode'];
+  addToBlacklist: NextGuardInstance['addToBlacklist'];
+  removeFromBlacklist: NextGuardInstance['removeFromBlacklist'];
+  events: EventEmitter;
+  sendTelegramAlert: typeof sendTelegramAlert;
+  getClientIP: typeof getClientIP;
+  inspectValue: typeof inspectValue;
+  deepInspect: typeof deepInspect;
+  ipInCIDR: typeof ipInCIDR;
+  VERSION: string;
+};
 
-/** Default instance middleware (zero-config) */
-export declare const middleware: NextGuardInstance['middleware'];
-
-/** Default instance Next.js middleware (zero-config) */
-export declare const nextMiddleware: NextGuardInstance['nextMiddleware'];
-
-/** Default instance raw handler wrapper (zero-config) */
-export declare const handler: NextGuardInstance['handler'];
-
-/** Ban an IP on the default instance */
-export declare const ban: NextGuardInstance['ban'];
-
-/** Unban an IP on the default instance */
-export declare const unban: NextGuardInstance['unban'];
-
-/** Get stats from the default instance */
-export declare const getStats: NextGuardInstance['getStats'];
-
-/** Set mode on the default instance */
-export declare const setMode: NextGuardInstance['setMode'];
-
-/** Events from the default instance */
-export declare const events: NextGuardInstance['events'];
-
-/** Package version string */
-export declare const VERSION: string;
+export default nextguard;

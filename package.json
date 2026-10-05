@@ -1,6 +1,6 @@
 {
-  "name": "nextguard",
-  "version": "1.0.0",
+  "name": "@nixxeltzy/nextguard",
+  "version": "1.1.0",
   "description": "🛡️ NextGuard — 7-Layer DDoS Firewall & Active Defense Shield for Node.js and Next.js",
   "main": "nextguard.js",
   "types": "nextguard.d.ts",
@@ -27,12 +27,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/nextguard.git"
+    "url": "https://github.com/NixxelTzy/nextguard.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/nextguard/issues"
+    "url": "https://github.com/NixxelTzy/nextguard/issues"
   },
-  "homepage": "https://github.com/yourusername/nextguard#readme",
+  "homepage": "https://github.com/NixxelTzy/nextguard#readme",
   "engines": {
     "node": ">=14.0.0"
   },

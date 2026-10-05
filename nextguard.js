@@ -6,20 +6,26 @@
  * ██║ ╚████║███████╗██╔╝ ██╗   ██║   ╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝
  * ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
  *
- * NextGuard v1.0.0 — 7-Layer DDoS Firewall & Active Defense Shield
- * Compatible with: Node.js (Express/Fastify/http) + Next.js (App Router & Pages Router)
- * Author  : NextGuard Team
- * License : MIT
+ * NextGuard v1.1.0 — 7-Layer DDoS Firewall & Active Defense Shield
+ * Universal Security Engine for Node.js (Express/Fastify/http) & Next.js (App/Pages/Edge)
  *
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │  LAYER 1 → IP Reputation & Blacklist Gate                                   │
- * │  LAYER 2 → Rate Limiter & Request Throttle                                  │
+ * │  LAYER 2 → Rate Limiter & Burst DDoS Throttle                               │
  * │  LAYER 3 → Behavioral Anomaly Detector                                      │
  * │  LAYER 4 → Header & Protocol Integrity Check                                │
  * │  LAYER 5 → Payload & Body Inspection (SQLi, XSS, RCE, Path Traversal)       │
  * │  LAYER 6 → Geo-Fencing & ASN Threat Intelligence                            │
  * │  LAYER 7 → Active Counter-Strike & Tarpit Engine                            │
  * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * PATH-AGNOSTIC ARCHITECTURE:
+ * NextGuard operates strictly as a security/firewall engine, not a router.
+ * All paths (/, /login, /dashboard, /admin, /api/users, /anything) are defined
+ * by your application and protected transparently without hardcoded route dependencies.
+ *
+ * TELEGRAM ALERT INTEGRATION:
+ * Automatic real-time security alerts to Telegram, optimized for Vercel Serverless & Edge.
  */
 
 'use strict';
@@ -34,7 +40,7 @@ const net = require('net');
 //  CONSTANTS & SIGNATURES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 /** Known malicious user-agent fragments (bots, scanners, exploit frameworks). */
 const MALICIOUS_UA_PATTERNS = [
@@ -108,7 +114,7 @@ const SUSPICIOUS_HEADERS = [
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  IN-MEMORY STORES  (swap with Redis for multi-instance deployments)
+//  IN-MEMORY STORES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** @type {Map<string, {count:number, firstSeen:number, lastSeen:number, violations:number, tarpitUntil:number|null}>} */
@@ -123,11 +129,11 @@ const tarpitStore = new Map();
 /** Challenge state (proof-of-work tokens). @type {Map<string, {token:string, expires:number, solved:boolean}>} */
 const challengeStore = new Map();
 
-/** Slow-read state — drains attacker buffers. @type {Set<string>} */
-const slowReadTargets = new Set();
-
 /** Geographic block cache. @type {Map<string, string>} */
 const geoCache = new Map();
+
+/** Telegram alert cooldown tracker per IP+layer to prevent DDoS alert floods. @type {Map<string, number>} */
+const telegramCooldown = new Map();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  DEFAULT CONFIGURATION
@@ -140,6 +146,21 @@ const DEFAULT_CONFIG = {
   trustProxy: true,
   logLevel: 'warn',           // 'silent' | 'warn' | 'info' | 'debug'
 
+  // Telegram Notifications (Perfect for Vercel / serverless deployments)
+  telegram: {
+    enabled: false,           // true to enable, or auto-enabled if env vars are present
+    botToken: null,           // e.g. process.env.TELEGRAM_BOT_TOKEN
+    chatId: null,             // e.g. process.env.TELEGRAM_CHAT_ID
+    cooldownMs: 30_000,       // 30s debounce between alerts per IP+layer (prevents DDoS flood)
+    minLayer: 1,              // minimum layer to trigger alert (1-7)
+  },
+
+  // Optional Admin API (disabled by default so NextGuard claims ZERO routes)
+  admin: {
+    enabled: false,           // false by default; NextGuard does not claim any internal routes
+    routePrefix: '/__nextguard',
+  },
+
   // Layer 1 — IP Reputation
   layer1: {
     enabled: true,
@@ -148,7 +169,7 @@ const DEFAULT_CONFIG = {
     banDurationMs: 3_600_000, // 1 hour default
   },
 
-  // Layer 2 — Rate Limiting
+  // Layer 2 — Rate Limiting & DDoS Prevention
   layer2: {
     enabled: true,
     windowMs: 60_000,         // 1-minute window
@@ -172,7 +193,7 @@ const DEFAULT_CONFIG = {
     enabled: true,
     requireUserAgent: true,
     blockMaliciousUA: true,
-    blockMissingSNI: false,   // HTTPS only — drop if no SNI
+    blockMissingSNI: false,
     maxHeaderSize: 8192,
   },
 
@@ -203,10 +224,9 @@ const DEFAULT_CONFIG = {
     slowReadEnabled: true,    // send data painfully slowly
     slowReadChunkMs: 2_000,   // 1 byte every 2s
     resetStormEnabled: true,  // send TCP RST-like HTTP to crash scanner state
-    honeypotPaths: [          // lure attackers into tarpit
-      '/.env', '/wp-admin', '/admin', '/phpmyadmin', '/config.php',
-      '/.git/HEAD', '/backup.sql', '/db.sql', '/server-info',
-      '/actuator', '/actuator/health', '/console', '/shell',
+    honeypotPaths: [          // pure exploit probes — NEVER app routes like /admin
+      '/.env', '/.git/HEAD', '/wp-config.php', '/phpmyadmin',
+      '/backup.sql', '/db.sql', '/.aws/credentials',
     ],
   },
 };
@@ -236,9 +256,6 @@ function createLogger(level) {
 
 /**
  * Deep-merge config objects.
- * @param {object} defaults
- * @param {object} overrides
- * @returns {object}
  */
 function deepMerge(defaults, overrides) {
   const result = { ...defaults };
@@ -258,21 +275,76 @@ function deepMerge(defaults, overrides) {
 }
 
 /**
- * Extract the real client IP respecting proxy headers.
- * @param {object} req
- * @param {boolean} trustProxy
- * @returns {string}
+ * Safely get a header value regardless of whether req.headers is a Node object or Web standard Headers.
+ */
+function getHeader(req, name) {
+  if (!req || !req.headers) return undefined;
+  const target = name.toLowerCase();
+  if (typeof req.headers.get === 'function') {
+    return req.headers.get(target);
+  }
+  return req.headers[target] || req.headers[name];
+}
+
+/**
+ * Normalize request headers into a plain lowercase object.
+ */
+function normalizeHeaders(req) {
+  if (!req || !req.headers) return {};
+  if (typeof req.headers.entries === 'function') {
+    const obj = {};
+    for (const [k, v] of req.headers.entries()) {
+      obj[k.toLowerCase()] = v;
+    }
+    return obj;
+  }
+  if (typeof req.headers === 'object') {
+    const obj = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      obj[k.toLowerCase()] = v;
+    }
+    return obj;
+  }
+  return {};
+}
+
+/**
+ * Extract clean URL and path from either Node.js or Next.js (NextRequest / Request) objects.
+ */
+function extractPathAndUrl(req) {
+  let fullUrl = '/';
+  if (req.nextUrl && typeof req.nextUrl.pathname === 'string') {
+    fullUrl = req.nextUrl.pathname + (req.nextUrl.search || '');
+  } else if (typeof req.url === 'string') {
+    try {
+      if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
+        const u = new URL(req.url);
+        fullUrl = u.pathname + u.search;
+      } else {
+        fullUrl = req.url;
+      }
+    } catch {
+      fullUrl = req.url;
+    }
+  }
+  const path = fullUrl.split('?')[0] || '/';
+  return { fullUrl, path };
+}
+
+/**
+ * Extract the real client IP respecting proxy headers and Vercel edge/serverless properties.
  */
 function getClientIP(req, trustProxy = true) {
   if (trustProxy) {
-    const xff = req.headers['x-forwarded-for'];
+    const xff = getHeader(req, 'x-forwarded-for');
     if (xff) return xff.split(',')[0].trim();
-    const xrip = req.headers['x-real-ip'];
+    const xrip = getHeader(req, 'x-real-ip');
     if (xrip) return xrip.trim();
-    const cfip = req.headers['cf-connecting-ip'];
+    const cfip = getHeader(req, 'cf-connecting-ip');
     if (cfip) return cfip.trim();
   }
   return (
+    req.ip ||
     req.socket?.remoteAddress ||
     req.connection?.remoteAddress ||
     '0.0.0.0'
@@ -281,10 +353,6 @@ function getClientIP(req, trustProxy = true) {
 
 /**
  * Check if an IP is within a CIDR range.
- * Supports IPv4 only (IPv6 passthrough returns false unless exact match).
- * @param {string} ip
- * @param {string} cidr
- * @returns {boolean}
  */
 function ipInCIDR(ip, cidr) {
   if (!cidr.includes('/')) return ip === cidr;
@@ -301,8 +369,6 @@ function ipInCIDR(ip, cidr) {
 
 /**
  * Generate a cryptographically random token.
- * @param {number} [bytes=16]
- * @returns {string}
  */
 function randomToken(bytes = 16) {
   return crypto.randomBytes(bytes).toString('hex');
@@ -310,31 +376,13 @@ function randomToken(bytes = 16) {
 
 /**
  * Compute SHA-256 of a string.
- * @param {string} data
- * @returns {string}
  */
 function sha256(data) {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
 /**
- * Generate a proof-of-work challenge token.
- * Target: find X such that sha256(challenge + X).startsWith(prefix).
- * @param {string} challenge
- * @param {string} prefix
- * @returns {string|null}
- */
-function solvePoW(challenge, prefix, maxIter = 1_000_000) {
-  for (let i = 0; i < maxIter; i++) {
-    if (sha256(challenge + i).startsWith(prefix)) return String(i);
-  }
-  return null;
-}
-
-/**
  * Parse raw cookie string into a key-value object.
- * @param {string} cookieHeader
- * @returns {object}
  */
 function parseCookies(cookieHeader = '') {
   return cookieHeader.split(';').reduce((acc, pair) => {
@@ -344,34 +392,101 @@ function parseCookies(cookieHeader = '') {
   }, {});
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TELEGRAM NOTIFICATION ENGINE (Vercel & Node.js Ready)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function escapeTelegramHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 /**
- * Convert a readable stream to a buffer (for body inspection).
- * @param {import('stream').Readable} stream
- * @param {number} maxBytes
- * @returns {Promise<Buffer>}
+ * Dispatch real-time threat alert to Telegram.
+ * Non-blocking, rate-limited, and compatible with Vercel Edge / Serverless / Node.
  */
-function streamToBuffer(stream, maxBytes) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    stream.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        stream.destroy();
-        return reject(new Error('Body too large'));
-      }
-      chunks.push(chunk);
-    });
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', reject);
-  });
+async function sendTelegramAlert(threatInfo, config, log) {
+  const tg = config?.telegram || {};
+  const botToken = tg.botToken || (typeof process !== 'undefined' ? (process.env.TELEGRAM_BOT_TOKEN || process.env.NEXTGUARD_TELEGRAM_TOKEN) : null);
+  const chatId = tg.chatId || (typeof process !== 'undefined' ? (process.env.TELEGRAM_CHAT_ID || process.env.NEXTGUARD_TELEGRAM_CHAT_ID) : null);
+
+  const isEnabled = tg.enabled === true || (tg.enabled !== false && Boolean(botToken && chatId));
+  if (!isEnabled || !botToken || !chatId) return false;
+
+  const minLayer = tg.minLayer ?? 1;
+  if ((threatInfo.layer ?? 1) < minLayer) return false;
+
+  // DDoS Throttle: prevent alert storm to Telegram during heavy traffic
+  const cooldownMs = tg.cooldownMs ?? 30_000;
+  const key = `${threatInfo.ip || 'unknown'}:${threatInfo.layer || 0}`;
+  const now = Date.now();
+  const lastAlert = telegramCooldown.get(key) || 0;
+  if (now - lastAlert < cooldownMs) {
+    return false; // throttled
+  }
+  telegramCooldown.set(key, now);
+
+  const message = [
+    `🛡️ <b>[NextGuard] Security Alert</b>`,
+    `🧱 <b>Layer:</b> Layer ${threatInfo.layer || 'Unknown'}`,
+    `⚠️ <b>Threat:</b> ${escapeTelegramHtml(threatInfo.reason || 'Attack detected')}`,
+    `🌐 <b>Target Path:</b> <code>${escapeTelegramHtml(threatInfo.path || '/')}</code>`,
+    `📍 <b>Attacker IP:</b> <code>${escapeTelegramHtml(threatInfo.ip || '0.0.0.0')}</code>`,
+    `📱 <b>Method:</b> ${escapeTelegramHtml(threatInfo.method || 'GET')}`,
+    `⚡ <b>Action:</b> ${escapeTelegramHtml(threatInfo.action || 'BLOCKED')}`,
+    `⏰ <b>Timestamp:</b> ${new Date().toISOString()}`,
+  ].join('\n');
+
+  const payload = {
+    chat_id: chatId,
+    text: message,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+
+  try {
+    if (typeof fetch === 'function') {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return true;
+    } else {
+      const postData = JSON.stringify(payload);
+      const parsedUrl = new URL(url);
+      const req = https.request({
+        hostname: parsedUrl.hostname,
+        port: 443,
+        path: parsedUrl.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+        },
+        timeout: 4000,
+      });
+      req.on('error', (err) => log?.debug('Telegram alert error:', err.message));
+      req.write(postData);
+      req.end();
+      return true;
+    }
+  } catch (err) {
+    log?.debug('Telegram notification failed:', err.message);
+    return false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  RESPONSE HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Send a standard HTTP response (works for Node http.ServerResponse & Next.js res). */
+/** Send a standard HTTP response (Node http.ServerResponse). */
 function sendResponse(res, statusCode, body, headers = {}) {
   if (res.headersSent || res.writableEnded) return;
 
@@ -421,7 +536,6 @@ function sendResetStorm(res, log) {
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Length', '0');
     res.statusCode = 400;
-    // Send many empty writes to spike the attacker's recv-Q
     for (let i = 0; i < 50; i++) {
       if (!res.writableEnded) res.write('');
     }
@@ -431,7 +545,6 @@ function sendResetStorm(res, log) {
   }
 }
 
-/** Convenience sleep. */
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -444,7 +557,6 @@ function layer1_ipReputation(ip, config, log) {
   const cfg = config.layer1;
   if (!cfg.enabled) return { blocked: false };
 
-  // Check permanent/temporary banlist
   if (banlist.has(ip)) {
     const entry = banlist.get(ip);
     if (entry.until === null || entry.until > Date.now()) {
@@ -455,7 +567,6 @@ function layer1_ipReputation(ip, config, log) {
     }
   }
 
-  // Check static blacklist (supports CIDR)
   for (const cidr of cfg.staticBlacklist) {
     if (ipInCIDR(ip, cidr)) {
       log.threat(`Layer1 | Static blacklist hit: ${ip} matches ${cidr}`);
@@ -464,7 +575,6 @@ function layer1_ipReputation(ip, config, log) {
     }
   }
 
-  // Check violation count for auto-ban
   const rec = ipStore.get(ip);
   if (rec && rec.violations >= cfg.autobanOnViolations) {
     log.threat(`Layer1 | Auto-ban triggered for ${ip} (${rec.violations} violations)`);
@@ -500,14 +610,12 @@ function layer2_rateLimiter(ip, config, log) {
     errorWindowStart: now,
   };
 
-  // Reset window if expired
   if (now - rec.firstSeen > cfg.windowMs) {
     rec.count = 0;
     rec.firstSeen = now;
     rec.paths = new Set();
   }
 
-  // Reset burst window
   if (now - rec.burstStart > cfg.burstWindowMs) {
     rec.burstCount = 0;
     rec.burstStart = now;
@@ -518,7 +626,6 @@ function layer2_rateLimiter(ip, config, log) {
   rec.lastSeen = now;
   ipStore.set(ip, rec);
 
-  // Burst check
   if (rec.burstCount > cfg.burstLimit) {
     rec.violations++;
     log.threat(`Layer2 | Burst limit exceeded: ${ip} (${rec.burstCount} req in ${cfg.burstWindowMs}ms)`);
@@ -530,7 +637,6 @@ function layer2_rateLimiter(ip, config, log) {
     };
   }
 
-  // Window check
   if (rec.count > cfg.maxRequests) {
     rec.violations++;
     log.warn(`Layer2 | Rate limit exceeded: ${ip} (${rec.count} req in window)`);
@@ -553,51 +659,32 @@ function layer3_behavior(ip, req, config, log) {
   const cfg = config.layer3;
   if (!cfg.enabled) return { blocked: false };
 
-  const now = Date.now();
   const rec = ipStore.get(ip);
   if (!rec) return { blocked: false };
 
-  const url = req.url || req.nextUrl?.pathname || '/';
-  rec.paths.add(url);
+  const { path } = extractPathAndUrl(req);
+  rec.paths.add(path);
 
-  // Too many unique paths — scanner/fuzzer pattern
   if (rec.paths.size > cfg.maxPathsPerWindow) {
     rec.violations++;
     log.threat(`Layer3 | Path scanning detected: ${ip} (${rec.paths.size} unique paths)`);
     return { blocked: true, reason: 'Path scanning behavior detected', layer: 3 };
   }
 
-  // Fingerprint cookie check for JS challenge
   if (cfg.jsChallenge) {
-    const cookies = parseCookies(req.headers['cookie'] || '');
+    const cookieHeader = getHeader(req, 'cookie') || '';
+    const cookies = parseCookies(cookieHeader);
     const fp = cookies[cfg.fingerprintCookieName];
-    if (!fp) {
-      // Bot fingerprint: no fingerprint cookie
-      // (real browsers would have been challenged)
-      log.debug(`Layer3 | No fingerprint cookie from ${ip}`);
-      return { blocked: false, needsChallenge: true };
+    if (fp) {
+      const [token, solution] = decodeURIComponent(fp).split(':');
+      if (token && solution && sha256(token + solution).startsWith(POW_PREFIX)) {
+        return { blocked: false };
+      }
     }
+    return { blocked: false, needsChallenge: true };
   }
 
   return { blocked: false };
-}
-
-/** Record a 4xx/5xx error against an IP. */
-function recordError(ip, config) {
-  const cfg = config.layer3;
-  const now = Date.now();
-  const rec = ipStore.get(ip);
-  if (!rec) return;
-
-  if (now - rec.errorWindowStart > config.layer2.windowMs) {
-    rec.errors = 0;
-    rec.errorWindowStart = now;
-  }
-  rec.errors++;
-
-  if (rec.errors > cfg.maxErrorsPerWindow) {
-    rec.violations++;
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -608,11 +695,10 @@ function layer4_headers(ip, req, config, log) {
   const cfg = config.layer4;
   if (!cfg.enabled) return { blocked: false };
 
-  const headers = req.headers || {};
-  const ua = headers['user-agent'] || '';
+  const allHeaders = normalizeHeaders(req);
+  const ua = getHeader(req, 'user-agent') || '';
   const method = (req.method || 'GET').toUpperCase();
 
-  // Require User-Agent
   if (cfg.requireUserAgent && !ua) {
     const rec = ipStore.get(ip);
     if (rec) rec.violations++;
@@ -620,7 +706,6 @@ function layer4_headers(ip, req, config, log) {
     return { blocked: true, reason: 'Missing User-Agent header', layer: 4 };
   }
 
-  // Block malicious UA
   if (cfg.blockMaliciousUA && ua) {
     for (const pattern of MALICIOUS_UA_PATTERNS) {
       if (pattern.test(ua)) {
@@ -632,7 +717,6 @@ function layer4_headers(ip, req, config, log) {
     }
   }
 
-  // Invalid HTTP method
   if (!ALLOWED_METHODS.has(method)) {
     const rec = ipStore.get(ip);
     if (rec) rec.violations++;
@@ -640,8 +724,7 @@ function layer4_headers(ip, req, config, log) {
     return { blocked: true, reason: `Invalid HTTP method: ${method}`, layer: 4 };
   }
 
-  // Header size check
-  const headerStr = JSON.stringify(headers);
+  const headerStr = JSON.stringify(allHeaders);
   if (headerStr.length > cfg.maxHeaderSize) {
     const rec = ipStore.get(ip);
     if (rec) rec.violations++;
@@ -649,12 +732,11 @@ function layer4_headers(ip, req, config, log) {
     return { blocked: true, reason: 'Request headers too large', layer: 4 };
   }
 
-  // Suspicious override headers
   for (const h of SUSPICIOUS_HEADERS) {
-    if (headers[h] !== undefined) {
+    if (allHeaders[h] !== undefined) {
       const rec = ipStore.get(ip);
       if (rec) rec.violations++;
-      log.warn(`Layer4 | Suspicious header "${h}" from ${ip}: ${headers[h]}`);
+      log.warn(`Layer4 | Suspicious header "${h}" from ${ip}: ${allHeaders[h]}`);
       return { blocked: true, reason: `Suspicious header detected: ${h}`, layer: 4 };
     }
   }
@@ -666,11 +748,6 @@ function layer4_headers(ip, req, config, log) {
 //  LAYER 5 — PAYLOAD & BODY INSPECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Inspect a string value for attack signatures.
- * @param {string} value
- * @returns {{matched:boolean, pattern:string|null}}
- */
 function inspectValue(value) {
   if (!value || typeof value !== 'string') return { matched: false, pattern: null };
   const decoded = (() => {
@@ -685,11 +762,6 @@ function inspectValue(value) {
   return { matched: false, pattern: null };
 }
 
-/**
- * Recursively inspect an object's values.
- * @param {any} obj
- * @returns {{matched:boolean, pattern:string|null, path:string|null}}
- */
 function deepInspect(obj, path = '') {
   if (typeof obj === 'string') {
     const r = inspectValue(obj);
@@ -713,10 +785,9 @@ async function layer5_payload(ip, req, config, log) {
   const cfg = config.layer5;
   if (!cfg.enabled) return { blocked: false };
 
-  // Inspect query string
-  if (cfg.inspectQuery) {
-    const url = req.url || req.nextUrl?.toString() || '';
-    const qs = url.includes('?') ? url.split('?').slice(1).join('?') : '';
+  const { fullUrl } = extractPathAndUrl(req);
+  if (cfg.inspectQuery && fullUrl.includes('?')) {
+    const qs = fullUrl.split('?').slice(1).join('?');
     if (qs) {
       const result = inspectValue(qs);
       if (result.matched) {
@@ -728,9 +799,8 @@ async function layer5_payload(ip, req, config, log) {
     }
   }
 
-  // Inspect cookies
   if (cfg.inspectCookies) {
-    const cookies = req.headers['cookie'] || '';
+    const cookies = getHeader(req, 'cookie') || '';
     const result = inspectValue(cookies);
     if (result.matched) {
       const rec = ipStore.get(ip);
@@ -740,9 +810,9 @@ async function layer5_payload(ip, req, config, log) {
     }
   }
 
-  // Inspect suspicious headers
   if (cfg.inspectHeaders) {
-    for (const [hk, hv] of Object.entries(req.headers || {})) {
+    const allHeaders = normalizeHeaders(req);
+    for (const [hk, hv] of Object.entries(allHeaders)) {
       if (['cookie', 'authorization', 'user-agent'].includes(hk)) continue;
       const result = inspectValue(String(hv));
       if (result.matched) {
@@ -754,9 +824,7 @@ async function layer5_payload(ip, req, config, log) {
     }
   }
 
-  // Inspect body (only for POST/PUT/PATCH)
   if (cfg.inspectBody && ['POST', 'PUT', 'PATCH'].includes((req.method || '').toUpperCase())) {
-    // Body may have been pre-parsed (Next.js / Express middleware)
     const body = req.body;
     if (body) {
       const result = deepInspect(body);
@@ -783,7 +851,6 @@ async function layer6_geo(ip, config, log) {
     return { blocked: false };
   }
 
-  // Check cache
   let country = geoCache.get(ip);
   if (!country && cfg.geoApiUrl) {
     try {
@@ -812,7 +879,6 @@ async function layer6_geo(ip, config, log) {
   return { blocked: false };
 }
 
-/** Minimal JSON fetch using native http/https. */
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http;
@@ -832,41 +898,34 @@ function fetchJson(url) {
 //  LAYER 7 — ACTIVE COUNTER-STRIKE & TARPIT ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Check if a request path is a honeypot lure.
- * @param {string} url
- * @param {string[]} honeypotPaths
- * @returns {boolean}
- */
 function isHoneypotPath(url, honeypotPaths) {
-  const path = url.split('?')[0].toLowerCase();
-  return honeypotPaths.some((p) => path === p.toLowerCase() || path.startsWith(p.toLowerCase() + '/'));
+  if (!honeypotPaths || !Array.isArray(honeypotPaths) || honeypotPaths.length === 0) return false;
+  const path = (url.split('?')[0] || '').toLowerCase();
+  return honeypotPaths.some((p) => {
+    const target = (p || '').toLowerCase();
+    if (!target) return false;
+    return path === target || path.startsWith(target.endsWith('/') ? target : target + '/');
+  });
 }
 
-/**
- * Execute layer-7 active defense against a detected attacker.
- * @returns {Promise<{handled:boolean}>}
- */
 async function layer7_counterStrike(ip, req, res, config, log, reason) {
   const cfg = config.layer7;
   if (!cfg.enabled) return { handled: false };
 
-  const url = req.url || req.nextUrl?.pathname || '/';
-  const isHoneypot = isHoneypotPath(url, cfg.honeypotPaths);
+  const { path } = extractPathAndUrl(req);
+  const isHoneypot = isHoneypotPath(path, cfg.honeypotPaths);
 
-  // Always tarpit honeypot requests
   if (isHoneypot) {
-    log.threat(`Layer7 | Honeypot triggered by ${ip} → ${url}`);
+    log.threat(`Layer7 | Honeypot triggered by ${ip} → ${path}`);
     const rec = ipStore.get(ip);
     if (rec) rec.violations += 5;
-    if (cfg.tarpitEnabled) {
+    if (cfg.tarpitEnabled && res && typeof res.write === 'function') {
       await sendTarpit(res, cfg.tarpitMaxMs, cfg.slowReadChunkMs, log);
       return { handled: true };
     }
   }
 
-  // Tarpit known attackers
-  if (cfg.tarpitEnabled && tarpitStore.has(ip)) {
+  if (cfg.tarpitEnabled && tarpitStore.has(ip) && res && typeof res.write === 'function') {
     const until = tarpitStore.get(ip);
     if (until > Date.now()) {
       log.debug(`Layer7 | Tarpitting ${ip} for ${Math.ceil((until - Date.now()) / 1000)}s`);
@@ -877,22 +936,20 @@ async function layer7_counterStrike(ip, req, res, config, log, reason) {
     }
   }
 
-  // Determine if we should escalate to active counter
   const rec = ipStore.get(ip);
   const violations = rec?.violations || 0;
 
   if (violations >= 3) {
-    // Set tarpit for future requests from this IP
     tarpitStore.set(ip, Date.now() + cfg.tarpitDelayMs);
     log.threat(`Layer7 | Tarpit set for ${ip} (${violations} violations) — reason: ${reason}`);
 
-    if (cfg.tarpitEnabled) {
+    if (cfg.tarpitEnabled && res && typeof res.write === 'function') {
       await sendTarpit(res, cfg.tarpitDelayMs, cfg.slowReadChunkMs, log);
       return { handled: true };
     }
   }
 
-  if (violations >= 1 && cfg.resetStormEnabled) {
+  if (violations >= 1 && cfg.resetStormEnabled && res && typeof res.write === 'function') {
     log.debug(`Layer7 | Reset storm for ${ip}`);
     sendResetStorm(res, log);
     return { handled: true };
@@ -902,7 +959,7 @@ async function layer7_counterStrike(ip, req, res, config, log, reason) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  PROOF-OF-WORK JS CHALLENGE
+//  PROOF-OF-WORK JS CHALLENGE (Zero Route Dependency)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const POW_PREFIX = '000';
@@ -939,7 +996,6 @@ function generateChallengePage(token, nonce) {
     (async () => {
       const challenge = ${JSON.stringify(token)};
       const prefix = ${JSON.stringify(POW_PREFIX)};
-      const nonce = ${JSON.stringify(nonce)};
       const status = document.getElementById('status');
       const bar = document.getElementById('bar');
       let i = 0;
@@ -948,34 +1004,22 @@ function generateChallengePage(token, nonce) {
         return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
       };
       status.textContent = 'Solving challenge…';
-      const solve = async () => {
-        while (true) {
-          if (i % 500 === 0) {
-            bar.style.width = Math.min(90, i / 2000 * 100) + '%';
-            status.textContent = 'Checking ' + i + ' candidates…';
-            await new Promise(r => setTimeout(r, 0));
-          }
-          const h = await hash(challenge + i);
-          if (h.startsWith(prefix)) {
-            bar.style.width = '100%';
-            status.textContent = 'Verified! Redirecting…';
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/__nextguard/verify';
-            const fields = {token: challenge, nonce, solution: String(i)};
-            for (const [k, v] of Object.entries(fields)) {
-              const inp = document.createElement('input');
-              inp.type = 'hidden'; inp.name = k; inp.value = v;
-              form.appendChild(inp);
-            }
-            document.body.appendChild(form);
-            form.submit();
-            return;
-          }
-          i++;
+      while (true) {
+        if (i % 500 === 0) {
+          bar.style.width = Math.min(90, i / 2000 * 100) + '%';
+          status.textContent = 'Checking ' + i + ' candidates…';
+          await new Promise(r => setTimeout(r, 0));
         }
-      };
-      solve();
+        const h = await hash(challenge + i);
+        if (h.startsWith(prefix)) {
+          bar.style.width = '100%';
+          status.textContent = 'Verified! Reloading…';
+          document.cookie = '__ng_fp=' + encodeURIComponent(challenge + ':' + i) + '; path=/; max-age=86400; SameSite=Lax';
+          window.location.reload();
+          return;
+        }
+        i++;
+      }
     })();
   </script>
 </body>
@@ -983,10 +1027,11 @@ function generateChallengePage(token, nonce) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SECURITY HEADERS MIDDLEWARE
+//  SECURITY HEADERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function applySecurityHeaders(res) {
+  if (!res || typeof res.setHeader !== 'function') return;
   const headers = {
     'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
     'X-Content-Type-Options': 'nosniff',
@@ -1014,16 +1059,16 @@ function applySecurityHeaders(res) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  ADMIN API HELPERS
+//  OPTIONAL ADMIN ROUTES (Only when developer explicitly enables config.admin)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function handleAdminRoute(path, req, res, config, log) {
+function handleAdminRoute(path, req, res, config, log, prefix) {
   const method = (req.method || 'GET').toUpperCase();
 
-  if (path === '/__nextguard/stats' && method === 'GET') {
+  if (path === `${prefix}/stats` && method === 'GET') {
     sendResponse(res, 200, {
       version: VERSION,
-      uptime: process.uptime(),
+      uptime: typeof process !== 'undefined' ? process.uptime() : 0,
       trackedIPs: ipStore.size,
       bannedIPs: banlist.size,
       tarpittedIPs: tarpitStore.size,
@@ -1033,7 +1078,7 @@ function handleAdminRoute(path, req, res, config, log) {
     return true;
   }
 
-  if (path === '/__nextguard/ban' && method === 'POST') {
+  if (path === `${prefix}/ban` && method === 'POST') {
     try {
       const body = req.body || {};
       const { ip: targetIp, durationMs, reason } = body;
@@ -1053,7 +1098,7 @@ function handleAdminRoute(path, req, res, config, log) {
     return true;
   }
 
-  if (path === '/__nextguard/unban' && method === 'POST') {
+  if (path === `${prefix}/unban` && method === 'POST') {
     try {
       const { ip: targetIp } = req.body || {};
       banlist.delete(targetIp);
@@ -1070,60 +1115,49 @@ function handleAdminRoute(path, req, res, config, log) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  MEMORY CLEANUP (prevent leak on long-running servers)
+//  MEMORY CLEANUP
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function startCleanupJob(config) {
-  const CLEANUP_INTERVAL = 5 * 60 * 1000; // every 5 minutes
+  if (typeof setInterval !== 'function') return;
+  const CLEANUP_INTERVAL = 5 * 60 * 1000;
   const MAX_IDLE_MS = config.layer2.windowMs * 2;
 
-  setInterval(() => {
+  const timer = setInterval(() => {
     const now = Date.now();
-
-    // Remove stale IP records
     for (const [ip, rec] of ipStore) {
       if (now - rec.lastSeen > MAX_IDLE_MS) ipStore.delete(ip);
     }
-
-    // Remove expired bans
     for (const [ip, ban] of banlist) {
       if (ban.until !== null && ban.until < now) banlist.delete(ip);
     }
-
-    // Remove expired tarpit entries
     for (const [ip, until] of tarpitStore) {
       if (until < now) tarpitStore.delete(ip);
     }
-
-    // Remove expired challenges
     for (const [token, ch] of challengeStore) {
       if (ch.expires < now) challengeStore.delete(token);
     }
-
-    // Clear geo cache periodically (every hour, so stale after 5 min cycles ×12)
+    for (const [k, time] of telegramCooldown) {
+      if (now - time > 120_000) telegramCooldown.delete(k);
+    }
     if (Math.random() < 0.083) geoCache.clear();
-  }, CLEANUP_INTERVAL).unref();
+  }, CLEANUP_INTERVAL);
+
+  if (typeof timer.unref === 'function') timer.unref();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  CORE GUARD ENGINE
+//  CORE 7-LAYER GUARD ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Run all 7 layers against a request.
- * @param {object} req - Node.js IncomingMessage or Next.js Request-like object
- * @param {object} res - Node.js ServerResponse or Next.js Response-like object
- * @param {object} config - Merged config
- * @param {object} log - Logger
- * @param {EventEmitter} events
- * @returns {Promise<{blocked:boolean, layer?:number, reason?:string, handled?:boolean}>}
+ * Run all 7 layers against any incoming request.
  */
 async function runGuard(req, res, config, log, events) {
   const ip = getClientIP(req, config.trustProxy);
-  const url = req.url || req.nextUrl?.toString() || '/';
-  const path = url.split('?')[0];
+  const { path } = extractPathAndUrl(req);
+  const method = (req.method || 'GET').toUpperCase();
 
-  // Initialize IP record
   if (!ipStore.has(ip)) {
     ipStore.set(ip, {
       count: 0,
@@ -1139,36 +1173,56 @@ async function runGuard(req, res, config, log, events) {
     });
   }
 
-  log.debug(`Guard | ${ip} ${req.method} ${path}`);
+  log.debug(`Guard | ${ip} ${method} ${path}`);
 
-  // Admin routes (always processed before guard layers)
-  if (path.startsWith('/__nextguard/')) {
-    if (handleAdminRoute(path, req, res, config, log)) return { blocked: false };
+  // Helper to emit threat events and trigger Telegram alert
+  const reportThreat = (layer, reason, action = 'BLOCKED') => {
+    const threatData = {
+      ip,
+      layer,
+      reason,
+      path,
+      method,
+      action,
+      req,
+      timestamp: new Date().toISOString(),
+    };
+    events.emit('threat', threatData);
+    sendTelegramAlert(threatData, config, log).catch(() => {});
+  };
+
+  // Optional Admin routes (strictly opt-in, disabled by default)
+  if (config.admin && config.admin.enabled) {
+    const prefix = config.admin.routePrefix || '/__nextguard';
+    if (path.startsWith(prefix)) {
+      if (handleAdminRoute(path, req, res, config, log, prefix)) return { blocked: false };
+    }
   }
 
-  // Lockdown mode — block everything except admin
+  // Lockdown mode — emergency traffic stop
   if (config.mode === 'lockdown') {
     log.warn(`Lockdown | Blocking all traffic: ${ip}`);
+    reportThreat(0, 'Lockdown mode active', '503 SERVICE UNAVAILABLE');
     const l7 = await layer7_counterStrike(ip, req, res, config, log, 'lockdown');
-    if (!l7.handled) sendResponse(res, 503, { error: 'Service unavailable' });
+    if (!l7.handled && res) sendResponse(res, 503, { error: 'Service unavailable' });
     return { blocked: true, reason: 'Lockdown mode active', layer: 0 };
   }
 
-  // ── Layer 1 ──────────────────────────────────────────────────────────────
+  // ── Layer 1: IP Reputation ──────────────────────────────────────────────
   const r1 = layer1_ipReputation(ip, config, log);
   if (r1.blocked) {
-    events.emit('threat', { ip, layer: 1, reason: r1.reason, req });
+    reportThreat(1, r1.reason, '403 FORBIDDEN');
     const l7 = await layer7_counterStrike(ip, req, res, config, log, r1.reason);
-    if (!l7.handled) sendResponse(res, 403, { error: 'Access denied', reason: r1.reason, layer: 1 });
+    if (!l7.handled && res) sendResponse(res, 403, { error: 'Access denied', reason: r1.reason, layer: 1 });
     return { blocked: true, ...r1 };
   }
 
-  // ── Layer 2 ──────────────────────────────────────────────────────────────
+  // ── Layer 2: Rate Limiting & Burst Protection ───────────────────────────
   const r2 = layer2_rateLimiter(ip, config, log);
   if (r2.blocked) {
-    events.emit('threat', { ip, layer: 2, reason: r2.reason, req });
+    reportThreat(2, r2.reason, '429 TOO MANY REQUESTS');
     const l7 = await layer7_counterStrike(ip, req, res, config, log, r2.reason);
-    if (!l7.handled) {
+    if (!l7.handled && res) {
       sendResponse(res, 429, { error: 'Too Many Requests', reason: r2.reason, layer: 2 }, {
         'Retry-After': String(r2.retryAfter || 60),
       });
@@ -1176,98 +1230,74 @@ async function runGuard(req, res, config, log, events) {
     return { blocked: true, ...r2 };
   }
 
-  // ── Layer 3 ──────────────────────────────────────────────────────────────
+  // ── Layer 3: Behavioral Anomaly Detection ───────────────────────────────
   const r3 = layer3_behavior(ip, req, config, log);
   if (r3.blocked) {
-    events.emit('threat', { ip, layer: 3, reason: r3.reason, req });
+    reportThreat(3, r3.reason, '403 FORBIDDEN');
     const l7 = await layer7_counterStrike(ip, req, res, config, log, r3.reason);
-    if (!l7.handled) sendResponse(res, 403, { error: 'Access denied', reason: r3.reason, layer: 3 });
+    if (!l7.handled && res) sendResponse(res, 403, { error: 'Access denied', reason: r3.reason, layer: 3 });
     return { blocked: true, ...r3 };
   }
 
-  // JS Challenge flow
+  // JS Proof-of-Work Challenge (optional)
   if (r3.needsChallenge && config.layer3.jsChallenge) {
     const token = randomToken();
     const nonce = randomToken(8);
     challengeStore.set(token, { token, expires: Date.now() + 120_000, solved: false, ip });
-    sendResponse(res, 403, generateChallengePage(token, nonce), {
-      'Content-Type': 'text/html; charset=utf-8',
-    });
+    if (res) {
+      sendResponse(res, 403, generateChallengePage(token, nonce), {
+        'Content-Type': 'text/html; charset=utf-8',
+      });
+    }
     return { blocked: true, reason: 'JS challenge issued', layer: 3 };
   }
 
-  // ── Layer 4 ──────────────────────────────────────────────────────────────
+  // ── Layer 4: Header & Protocol Integrity ────────────────────────────────
   const r4 = layer4_headers(ip, req, config, log);
   if (r4.blocked) {
-    events.emit('threat', { ip, layer: 4, reason: r4.reason, req });
+    reportThreat(4, r4.reason, '400 BAD REQUEST');
     const l7 = await layer7_counterStrike(ip, req, res, config, log, r4.reason);
-    if (!l7.handled) sendResponse(res, 400, { error: 'Bad Request', reason: r4.reason, layer: 4 });
+    if (!l7.handled && res) sendResponse(res, 400, { error: 'Bad Request', reason: r4.reason, layer: 4 });
     return { blocked: true, ...r4 };
   }
 
-  // ── Layer 5 ──────────────────────────────────────────────────────────────
+  // ── Layer 5: Payload Inspection ─────────────────────────────────────────
   const r5 = await layer5_payload(ip, req, config, log);
   if (r5.blocked) {
-    events.emit('threat', { ip, layer: 5, reason: r5.reason, req });
+    reportThreat(5, r5.reason, '400 BAD REQUEST');
     const l7 = await layer7_counterStrike(ip, req, res, config, log, r5.reason);
-    if (!l7.handled) sendResponse(res, 400, { error: 'Malicious payload detected', reason: r5.reason, layer: 5 });
+    if (!l7.handled && res) sendResponse(res, 400, { error: 'Malicious payload detected', reason: r5.reason, layer: 5 });
     return { blocked: true, ...r5 };
   }
 
-  // ── Layer 6 ──────────────────────────────────────────────────────────────
+  // ── Layer 6: Geo-Fencing & ASN ──────────────────────────────────────────
   const r6 = await layer6_geo(ip, config, log);
   if (r6.blocked) {
-    events.emit('threat', { ip, layer: 6, reason: r6.reason, req });
-    sendResponse(res, 403, { error: 'Access denied', reason: r6.reason, layer: 6 });
+    reportThreat(6, r6.reason, '403 FORBIDDEN');
+    if (res) sendResponse(res, 403, { error: 'Access denied', reason: r6.reason, layer: 6 });
     return { blocked: true, ...r6 };
   }
 
-  // ── Layer 7 (honeypot check) ──────────────────────────────────────────────
+  // ── Layer 7: Honeypot Probing Check ─────────────────────────────────────
   const cfg7 = config.layer7;
   if (cfg7.enabled && isHoneypotPath(path, cfg7.honeypotPaths)) {
-    events.emit('threat', { ip, layer: 7, reason: 'Honeypot access', req });
+    reportThreat(7, 'Honeypot access', 'TARPIT COUNTER-STRIKE');
     await layer7_counterStrike(ip, req, res, config, log, 'Honeypot access');
     return { blocked: true, reason: 'Honeypot access', layer: 7 };
   }
 
-  // ── All layers passed ────────────────────────────────────────────────────
-  applySecurityHeaders(res);
-  log.debug(`Guard | ALLOW ${ip} ${req.method} ${path}`);
+  // ── All 7 layers cleared — Apply security headers ───────────────────────
+  if (res) applySecurityHeaders(res);
+  log.debug(`Guard | ALLOW ${ip} ${method} ${path}`);
   return { blocked: false };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  PUBLIC API — createNextGuard(config?)
+//  FACTORY: createNextGuard(config?)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Create a NextGuard instance.
- *
- * @param {Partial<typeof DEFAULT_CONFIG>} [userConfig]
- * @returns {{
- *   middleware: function,
- *   nextMiddleware: function,
- *   handler: function,
- *   ban: function,
- *   unban: function,
- *   getStats: function,
- *   setMode: function,
- *   events: EventEmitter,
- *   config: typeof DEFAULT_CONFIG,
- * }}
- *
- * @example
- * // Express / Node http
- * const { middleware } = createNextGuard({ layer2: { maxRequests: 60 } });
- * app.use(middleware);
- *
- * @example
- * // Next.js middleware.js (App Router)
- * export { nextMiddleware as middleware } from 'nextguard';
- * // or with config:
- * import { createNextGuard } from 'nextguard';
- * const guard = createNextGuard({ layer6: { enabled: true, blockedCountries: ['CN','RU'] } });
- * export const middleware = guard.nextMiddleware;
+ * Create a full NextGuard instance with all management controls.
  */
 function createNextGuard(userConfig = {}) {
   const config = deepMerge(DEFAULT_CONFIG, userConfig);
@@ -1277,11 +1307,7 @@ function createNextGuard(userConfig = {}) {
   log.info(`NextGuard v${VERSION} initialized | mode: ${config.mode} | layers: 1-7`);
   startCleanupJob(config);
 
-  // ── Express / http.createServer middleware ──────────────────────────────
-  /**
-   * Express-compatible middleware.
-   * Usage: app.use(guard.middleware)
-   */
+  // Express / Node.js HTTP Middleware
   const middleware = (req, res, next) => {
     runGuard(req, res, config, log, events).then((result) => {
       if (!result.blocked && typeof next === 'function') {
@@ -1293,22 +1319,16 @@ function createNextGuard(userConfig = {}) {
     });
   };
 
-  // ── Next.js App Router / Edge Middleware ────────────────────────────────
-  /**
-   * Next.js middleware (middleware.js / middleware.ts at project root).
-   * Usage: export const middleware = guard.nextMiddleware;
-   *
-   * Note: Next.js Edge Runtime doesn't support all Node APIs.
-   * For full functionality, use in Node.js runtime via:
-   *   export const config = { runtime: 'nodejs' }
-   */
+  // Next.js (App Router / Edge / Vercel) Middleware
   const nextMiddleware = async (req) => {
-    // Next.js uses the Response/NextResponse API
-    // We create a mock res-like object and check the result
-    let blockedResponse = null;
     let statusCode = 200;
     let responseBody = null;
-    let responseHeaders = {};
+    const responseHeaders = {
+      'Content-Type': 'application/json',
+      'X-NextGuard': VERSION,
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+    };
 
     const mockRes = {
       headersSent: false,
@@ -1330,25 +1350,30 @@ function createNextGuard(userConfig = {}) {
     const result = await runGuard(req, mockRes, config, log, events);
 
     if (result.blocked) {
-      const body = responseBody || JSON.stringify({ error: 'Access denied', reason: result.reason });
-      const headers = {
-        'Content-Type': 'application/json',
-        'X-NextGuard': VERSION,
-        ...responseHeaders,
-      };
-      // Return a standard Response object (works with Next.js / Vercel Edge)
-      return new Response(body, { status: statusCode || 403, headers });
+      const body = responseBody || JSON.stringify({
+        error: 'Access denied',
+        reason: result.reason,
+        layer: result.layer,
+      });
+      return new Response(body, {
+        status: statusCode || 403,
+        headers: responseHeaders,
+      });
     }
 
-    // Not blocked — return null to let Next.js continue
+    // Returning null allows Next.js to route normally to the target application page/API
     return null;
   };
 
-  // ── Raw HTTP handler (for custom http.createServer usage) ───────────────
-  /**
-   * Wrap an existing HTTP handler with NextGuard protection.
-   * Usage: http.createServer(guard.handler(myRequestHandler))
-   */
+  // Universal Middleware: detects Express (req, res, next) vs Next.js (req)
+  const universalMiddleware = (req, res, next) => {
+    if (typeof next === 'function' || (res && typeof res.setHeader === 'function' && typeof res.end === 'function')) {
+      return middleware(req, res, next);
+    }
+    return nextMiddleware(req);
+  };
+
+  // Raw HTTP handler wrapper
   const handler = (next) => (req, res) => {
     runGuard(req, res, config, log, events).then((result) => {
       if (!result.blocked) next(req, res);
@@ -1358,25 +1383,20 @@ function createNextGuard(userConfig = {}) {
     });
   };
 
-  // ── Public management API ───────────────────────────────────────────────
-
-  /** Manually ban an IP. */
   const ban = (ip, { durationMs = null, reason = 'manual' } = {}) => {
     banlist.set(ip, { until: durationMs ? Date.now() + durationMs : null, reason });
     log.info(`API | Ban: ${ip} (${reason})`);
   };
 
-  /** Remove a ban. */
   const unban = (ip) => {
     banlist.delete(ip);
     tarpitStore.delete(ip);
     log.info(`API | Unban: ${ip}`);
   };
 
-  /** Get current stats. */
   const getStats = () => ({
     version: VERSION,
-    uptime: process.uptime(),
+    uptime: typeof process !== 'undefined' ? process.uptime() : 0,
     mode: config.mode,
     trackedIPs: ipStore.size,
     bannedIPs: banlist.size,
@@ -1388,7 +1408,6 @@ function createNextGuard(userConfig = {}) {
       .map(([ip, r]) => ({ ip, violations: r.violations, requests: r.count })),
   });
 
-  /** Switch operating mode at runtime. */
   const setMode = (mode) => {
     if (!['protect', 'monitor', 'lockdown'].includes(mode)) {
       throw new Error(`Invalid mode: ${mode}. Must be protect | monitor | lockdown`);
@@ -1397,21 +1416,35 @@ function createNextGuard(userConfig = {}) {
     log.info(`Mode changed → ${mode}`);
   };
 
-  /** Add IPs to static blacklist at runtime. */
   const addToBlacklist = (ip) => {
     config.layer1.staticBlacklist.push(ip);
     log.info(`API | Blacklist added: ${ip}`);
   };
 
-  /** Remove an IP from the static blacklist. */
   const removeFromBlacklist = (ip) => {
     config.layer1.staticBlacklist = config.layer1.staticBlacklist.filter((i) => i !== ip);
     log.info(`API | Blacklist removed: ${ip}`);
   };
 
-  return {
+  // Attach instance utilities to the universal middleware function
+  universalMiddleware.instance = null;
+  universalMiddleware.middleware = middleware;
+  universalMiddleware.nextMiddleware = nextMiddleware;
+  universalMiddleware.handler = handler;
+  universalMiddleware.ban = ban;
+  universalMiddleware.unban = unban;
+  universalMiddleware.getStats = getStats;
+  universalMiddleware.setMode = setMode;
+  universalMiddleware.addToBlacklist = addToBlacklist;
+  universalMiddleware.removeFromBlacklist = removeFromBlacklist;
+  universalMiddleware.events = events;
+  universalMiddleware.config = config;
+  universalMiddleware.version = VERSION;
+
+  const instance = {
     middleware,
     nextMiddleware,
+    universalMiddleware,
     handler,
     ban,
     unban,
@@ -1419,37 +1452,88 @@ function createNextGuard(userConfig = {}) {
     setMode,
     addToBlacklist,
     removeFromBlacklist,
+    sendTelegramAlert: (threatInfo) => sendTelegramAlert(threatInfo, config, log),
     events,
     config,
     version: VERSION,
   };
+
+  universalMiddleware.instance = instance;
+  return instance;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  CONVENIENCE EXPORTS
+//  PRIMARY EXPORT: nextguard(...)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Pre-built default instance (zero-config usage)
-const _defaultInstance = createNextGuard();
+function isRequestObject(obj) {
+  return Boolean(
+    obj &&
+    typeof obj === 'object' &&
+    typeof obj.method === 'string' &&
+    (typeof obj.url === 'string' || obj.nextUrl)
+  );
+}
 
-module.exports = {
-  // Factory (recommended)
-  createNextGuard,
+let _defaultInstance = null;
+function getOrCreateDefaultInstance() {
+  if (!_defaultInstance) {
+    _defaultInstance = createNextGuard();
+  }
+  return _defaultInstance;
+}
 
-  // Default instance shortcuts
-  middleware: _defaultInstance.middleware,
-  nextMiddleware: _defaultInstance.nextMiddleware,
-  handler: _defaultInstance.handler,
-  ban: _defaultInstance.ban,
-  unban: _defaultInstance.unban,
-  getStats: _defaultInstance.getStats,
-  setMode: _defaultInstance.setMode,
-  events: _defaultInstance.events,
+/**
+ * Universal NextGuard Entry Point
+ *
+ * Usage 1 — Zero-config middleware for Next.js:
+ *   import { nextguard } from "nextguard";
+ *   export const middleware = nextguard();
+ *   export const config = { matcher: ["/:path*"] };
+ *
+ * Usage 2 — Direct functional Next.js middleware:
+ *   export function middleware(request) {
+ *     return nextguard(request);
+ *   }
+ *
+ * Usage 3 — Configured middleware (Express or Next.js):
+ *   export const middleware = nextguard({
+ *     layer2: { maxRequests: 100 },
+ *     telegram: { botToken: "...", chatId: "..." },
+ *   });
+ */
+function nextguard(optionsOrRequest = {}) {
+  // Direct execution with Next.js Request: export function middleware(req) { return nextguard(req); }
+  if (isRequestObject(optionsOrRequest)) {
+    const inst = getOrCreateDefaultInstance();
+    return inst.universalMiddleware(optionsOrRequest);
+  }
 
-  // Utilities (advanced use)
-  getClientIP,
-  inspectValue,
-  deepInspect,
-  ipInCIDR,
-  VERSION,
-};
+  // Factory call: nextguard() or nextguard(config)
+  const instance = createNextGuard(optionsOrRequest);
+  return instance.universalMiddleware;
+}
+
+// Attach all methods and properties to `nextguard`
+const defaultInst = getOrCreateDefaultInstance();
+
+nextguard.nextguard = nextguard;
+nextguard.createNextGuard = createNextGuard;
+nextguard.middleware = defaultInst.universalMiddleware;
+nextguard.nextMiddleware = defaultInst.nextMiddleware;
+nextguard.handler = defaultInst.handler;
+nextguard.ban = defaultInst.ban;
+nextguard.unban = defaultInst.unban;
+nextguard.getStats = defaultInst.getStats;
+nextguard.setMode = defaultInst.setMode;
+nextguard.addToBlacklist = defaultInst.addToBlacklist;
+nextguard.removeFromBlacklist = defaultInst.removeFromBlacklist;
+nextguard.events = defaultInst.events;
+nextguard.sendTelegramAlert = (threatInfo, cfg = {}) => sendTelegramAlert(threatInfo, deepMerge(DEFAULT_CONFIG, cfg), createLogger('silent'));
+nextguard.getClientIP = getClientIP;
+nextguard.inspectValue = inspectValue;
+nextguard.deepInspect = deepInspect;
+nextguard.ipInCIDR = ipInCIDR;
+nextguard.VERSION = VERSION;
+
+module.exports = nextguard;
